@@ -672,7 +672,7 @@ export class TUI extends Container {
 			this.terminal.write("\x1b[?2031h");
 		}
 		this.queryCellSize();
-		this.requestRender();
+		this.requestRender(this.screenMode === "fullscreen");
 	}
 
 	addInputListener(listener: InputListener): () => void {
@@ -1288,6 +1288,144 @@ export class TUI extends Container {
 	}
 
 	private doRender(): void {
+		if (this.screenMode === "fullscreen") {
+			this.doFullscreenRender();
+			return;
+		}
+		this.doInlineRender();
+	}
+
+	private doFullscreenRender(): void {
+		if (this.stopped) return;
+		const width = Math.max(1, this.terminal.columns);
+		const height = Math.max(1, this.terminal.rows);
+		const dimensionsChanged =
+			(this.previousWidth !== 0 && this.previousWidth !== width) ||
+			(this.previousHeight !== 0 && this.previousHeight !== height);
+
+		// Keep component rendering unchanged for API compatibility. Transcript
+		// virtualization is layered on later; this renderer only constrains terminal
+		// output and retained frame state to the visible screen.
+		let newLines = this.render(width);
+		if (this.overlayStack.length > 0) {
+			newLines = this.compositeOverlays(newLines, width, height);
+		}
+		if (newLines.length > height) {
+			newLines = newLines.slice(-height);
+		}
+		while (newLines.length < height) {
+			newLines.push("");
+		}
+
+		const cursorPos = this.extractCursorPosition(newLines, height);
+		newLines = this.applyLineResets(newLines);
+		const newKittyImageIds = this.collectKittyImageIds(newLines);
+		const changedRows: number[] = [];
+		for (let row = 0; row < height; row++) {
+			if (this.previousLines[row] !== newLines[row]) {
+				changedRows.push(row);
+			}
+		}
+
+		let fullRender = this.previousLines.length !== height || dimensionsChanged;
+		if (changedRows.length > 0 && (this.previousKittyImageIds.size > 0 || newKittyImageIds.size > 0)) {
+			// Images reserve multiple terminal rows. Repainting the bounded frame is
+			// the simplest correct fallback when an image-bearing frame changes.
+			fullRender = true;
+		}
+		const rowsToRender = fullRender ? Array.from({ length: height }, (_, row) => row) : changedRows;
+
+		if (rowsToRender.length > 0) {
+			let buffer = "\x1b[?2026h";
+			if (fullRender) {
+				this.fullRedrawCount += 1;
+				buffer += this.deleteKittyImages(this.previousKittyImageIds);
+				buffer += "\x1b[2J";
+			}
+
+			for (let index = 0; index < rowsToRender.length; index++) {
+				const row = rowsToRender[index];
+				const line = newLines[row];
+				this.assertFullscreenLineFits(line, row, width, newLines);
+				buffer += `\x1b[${row + 1};1H\x1b[2K`;
+
+				if (isImageLine(line)) {
+					const reservedRows = this.getKittyImageReservedRows(newLines, row, height - 1);
+					for (let offset = 1; offset < reservedRows; offset++) {
+						buffer += `\x1b[${row + offset + 1};1H\x1b[2K`;
+					}
+					buffer += `\x1b[${row + 1};1H${line}`;
+					index += reservedRows - 1;
+					continue;
+				}
+				buffer += line;
+			}
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+		}
+
+		this.cursorRow = height - 1;
+		this.hardwareCursorRow = height - 1;
+		this.maxLinesRendered = height;
+		this.previousViewportTop = 0;
+		this.positionFullscreenHardwareCursor(cursorPos, height, width);
+		this.previousLines = newLines;
+		this.previousKittyImageIds = newKittyImageIds;
+		this.previousWidth = width;
+		this.previousHeight = height;
+	}
+
+	private assertFullscreenLineFits(line: string, row: number, width: number, lines: string[]): void {
+		if (isImageLine(line) || visibleWidth(line) <= width) return;
+
+		const crashLogPath = path.join(this.logDirectory, "pi-crash.log");
+		const crashData = [
+			`Crash at ${new Date().toISOString()}`,
+			`Terminal width: ${width}`,
+			`Line ${row} visible width: ${visibleWidth(line)}`,
+			"",
+			"=== Fullscreen frame lines ===",
+			...lines.map((renderedLine, index) => `[${index}] (w=${visibleWidth(renderedLine)}) ${renderedLine}`),
+			"",
+		].join("\n");
+		fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+		fs.writeFileSync(crashLogPath, crashData);
+		this.stop();
+
+		throw new Error(
+			[
+				`Rendered line ${row} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
+				"",
+				"This is likely caused by a custom TUI component not truncating its output.",
+				"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+				"",
+				`Debug log written to: ${crashLogPath}`,
+			].join("\n"),
+		);
+	}
+
+	private positionFullscreenHardwareCursor(
+		cursorPos: { row: number; col: number } | null,
+		height: number,
+		width: number,
+	): void {
+		if (!cursorPos) {
+			this.terminal.hideCursor();
+			return;
+		}
+
+		const targetRow = Math.max(0, Math.min(cursorPos.row, height - 1));
+		const targetCol = Math.max(0, Math.min(cursorPos.col, width - 1));
+		this.terminal.write(`\x1b[${targetRow + 1};${targetCol + 1}H`);
+		this.hardwareCursorRow = targetRow;
+		if (this.showHardwareCursor) {
+			this.terminal.showCursor();
+		} else {
+			this.terminal.hideCursor();
+		}
+	}
+
+	private doInlineRender(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
