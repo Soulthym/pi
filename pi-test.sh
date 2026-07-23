@@ -3,12 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Check for --no-env flag
+# Check script-only flags
 NO_ENV=false
+SHOULD_BUILD=false
 ARGS=()
 for arg in "$@"; do
   if [[ "$arg" == "--no-env" ]]; then
     NO_ENV=true
+  elif [[ "$arg" == "--build" ]]; then
+    SHOULD_BUILD=true
   else
     ARGS+=("$arg")
   fi
@@ -54,4 +57,14 @@ if [[ "$NO_ENV" == "true" ]]; then
   echo "Running without API keys..."
 fi
 
-"$SCRIPT_DIR/node_modules/.bin/tsx" --tsconfig "$SCRIPT_DIR/tsconfig.json" "$SCRIPT_DIR/packages/coding-agent/src/cli.ts" ${ARGS[@]+"${ARGS[@]}"}
+if [[ "$SHOULD_BUILD" == "true" ]]; then
+  npm --prefix "$SCRIPT_DIR" run build:offline
+fi
+
+BUILT_CLI="$SCRIPT_DIR/packages/coding-agent/dist/cli.js"
+if [[ ! -f "$BUILT_CLI" ]]; then
+  echo "Build not found. Run ./pi-test.sh --build." >&2
+  exit 1
+fi
+
+node "$BUILT_CLI" ${ARGS[@]+"${ARGS[@]}"}
