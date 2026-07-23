@@ -198,7 +198,8 @@ async function settleRender(): Promise<void> {
 
 async function measureTerminalBytes(
 	components: readonly CountingComponent[],
-	streamingTarget: Text,
+	streamingAssistantTarget: Text,
+	streamingToolTarget: Text,
 ): Promise<Record<string, number>> {
 	const terminal = new RecordingTerminal(80, 24);
 	const tui = new TUI(terminal);
@@ -215,10 +216,16 @@ async function measureTerminalBytes(
 	const idle = terminal.bytesWritten;
 
 	terminal.resetBytes();
-	streamingTarget.setText("terminal streaming update");
+	streamingAssistantTarget.setText("terminal assistant streaming update");
 	tui.requestRender();
 	await settleRender();
-	const streaming = terminal.bytesWritten;
+	const streamingAssistant = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	streamingToolTarget.setText("terminal tool streaming update");
+	tui.requestRender();
+	await settleRender();
+	const streamingTool = terminal.bytesWritten;
 
 	terminal.resetBytes();
 	terminal.resize(100, 24);
@@ -237,7 +244,7 @@ async function measureTerminalBytes(
 	const globalInvalidation = terminal.bytesWritten;
 
 	tui.stop();
-	return { initial, idle, streaming, widthChange, heightChange, globalInvalidation };
+	return { initial, idle, streamingAssistant, streamingTool, widthChange, heightChange, globalInvalidation };
 }
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -245,7 +252,8 @@ const fixturePath = join(directory, "fixtures", "large-session.jsonl");
 const messages = parseFixture(fixturePath);
 const root = new Container();
 const components: CountingComponent[] = [];
-const mutableTexts: Text[] = [];
+const assistantTexts: Text[] = [];
+const toolTexts: Text[] = [];
 
 for (const message of messages) {
 	const text = extractMessageText(message);
@@ -254,7 +262,8 @@ for (const message of messages) {
 	const component = new CountingComponent(textComponent);
 	root.addChild(component);
 	components.push(component);
-	mutableTexts.push(textComponent);
+	if (message.role === "assistant") assistantTexts.push(textComponent);
+	if (message.role === "toolResult") toolTexts.push(textComponent);
 }
 
 const runs = 5;
@@ -263,12 +272,21 @@ const idle = repeat(runs, () => measure(root, components, 80));
 const viewportSlice = repeat(runs, () => measure(root, components, 80, 24));
 const widthChange = repeat(runs, () => measure(root, components, 100));
 
-const streamingTarget = mutableTexts.at(-1);
-if (!streamingTarget) throw new Error("Large-session fixture contains no visible messages");
-let streamingSuffix = "";
-const streaming = repeat(runs, () => {
-	streamingSuffix += ".";
-	streamingTarget.setText(`streaming${streamingSuffix}`);
+const streamingAssistantTarget = assistantTexts.at(-1);
+const streamingToolTarget = toolTexts.at(-1);
+if (!streamingAssistantTarget || !streamingToolTarget) {
+	throw new Error("Large-session fixture must contain visible assistant and tool-result messages");
+}
+let assistantSuffix = "";
+const streamingAssistant = repeat(runs, () => {
+	assistantSuffix += ".";
+	streamingAssistantTarget.setText(`assistant streaming${assistantSuffix}`);
+	return measure(root, components, 80);
+});
+let toolSuffix = "";
+const streamingTool = repeat(runs, () => {
+	toolSuffix += ".";
+	streamingToolTarget.setText(`tool streaming${toolSuffix}`);
 	return measure(root, components, 80);
 });
 
@@ -277,7 +295,7 @@ const globalInvalidation = repeat(runs, () => {
 	return measure(root, components, 80);
 });
 
-const terminalBytes = await measureTerminalBytes(components, streamingTarget);
+const terminalBytes = await measureTerminalBytes(components, streamingAssistantTarget, streamingToolTarget);
 
 process.stdout.write(
 	`${JSON.stringify(
@@ -291,7 +309,8 @@ process.stdout.write(
 				idle,
 				viewportSlice,
 				widthChange,
-				streaming,
+				streamingAssistant,
+				streamingTool,
 				globalInvalidation,
 			},
 			terminalBytes,
