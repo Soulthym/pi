@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { type Component, Container, Text } from "../../tui/src/index.ts";
+import { type Component, Container, type Terminal, Text, TUI } from "../../tui/src/index.ts";
 
 type FixtureContent = {
 	type?: unknown;
@@ -44,6 +44,85 @@ class CountingComponent implements Component {
 
 	invalidate(): void {
 		this.component.invalidate();
+	}
+}
+
+class RecordingTerminal implements Terminal {
+	private resizeHandler: (() => void) | undefined;
+	private width: number;
+	private height: number;
+	bytesWritten = 0;
+
+	constructor(columns: number, rows: number) {
+		this.width = columns;
+		this.height = rows;
+	}
+
+	start(_onInput: (data: string) => void, onResize: () => void): void {
+		this.resizeHandler = onResize;
+	}
+
+	stop(): void {
+		this.resizeHandler = undefined;
+	}
+
+	async drainInput(): Promise<void> {}
+
+	write(data: string): void {
+		this.bytesWritten += Buffer.byteLength(data);
+	}
+
+	get columns(): number {
+		return this.width;
+	}
+
+	get rows(): number {
+		return this.height;
+	}
+
+	get kittyProtocolActive(): boolean {
+		return false;
+	}
+
+	moveBy(lines: number): void {
+		if (lines > 0) this.write(`\x1b[${lines}B`);
+		if (lines < 0) this.write(`\x1b[${-lines}A`);
+	}
+
+	hideCursor(): void {
+		this.write("\x1b[?25l");
+	}
+
+	showCursor(): void {
+		this.write("\x1b[?25h");
+	}
+
+	clearLine(): void {
+		this.write("\x1b[K");
+	}
+
+	clearFromCursor(): void {
+		this.write("\x1b[J");
+	}
+
+	clearScreen(): void {
+		this.write("\x1b[2J\x1b[H");
+	}
+
+	setTitle(title: string): void {
+		this.write(`\x1b]0;${title}\x07`);
+	}
+
+	setProgress(_active: boolean): void {}
+
+	resetBytes(): void {
+		this.bytesWritten = 0;
+	}
+
+	resize(columns: number, rows: number): void {
+		this.width = columns;
+		this.height = rows;
+		this.resizeHandler?.();
 	}
 }
 
@@ -113,6 +192,54 @@ function repeat(runs: number, run: () => Metric): Metric {
 	return average(Array.from({ length: runs }, run));
 }
 
+async function settleRender(): Promise<void> {
+	await new Promise<void>((resolve) => setTimeout(resolve, 25));
+}
+
+async function measureTerminalBytes(
+	components: readonly CountingComponent[],
+	streamingTarget: Text,
+): Promise<Record<string, number>> {
+	const terminal = new RecordingTerminal(80, 24);
+	const tui = new TUI(terminal);
+	for (const component of components) tui.addChild(component);
+
+	tui.start();
+	terminal.resetBytes();
+	await settleRender();
+	const initial = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	tui.requestRender();
+	await settleRender();
+	const idle = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	streamingTarget.setText("terminal streaming update");
+	tui.requestRender();
+	await settleRender();
+	const streaming = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	terminal.resize(100, 24);
+	await settleRender();
+	const widthChange = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	terminal.resize(100, 30);
+	await settleRender();
+	const heightChange = terminal.bytesWritten;
+
+	terminal.resetBytes();
+	tui.invalidate();
+	tui.requestRender();
+	await settleRender();
+	const globalInvalidation = terminal.bytesWritten;
+
+	tui.stop();
+	return { initial, idle, streaming, widthChange, heightChange, globalInvalidation };
+}
+
 const directory = dirname(fileURLToPath(import.meta.url));
 const fixturePath = join(directory, "fixtures", "large-session.jsonl");
 const messages = parseFixture(fixturePath);
@@ -150,6 +277,8 @@ const globalInvalidation = repeat(runs, () => {
 	return measure(root, components, 80);
 });
 
+const terminalBytes = await measureTerminalBytes(components, streamingTarget);
+
 process.stdout.write(
 	`${JSON.stringify(
 		{
@@ -165,6 +294,7 @@ process.stdout.write(
 				streaming,
 				globalInvalidation,
 			},
+			terminalBytes,
 		},
 		null,
 		2,
