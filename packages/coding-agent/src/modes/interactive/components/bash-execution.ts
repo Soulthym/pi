@@ -13,6 +13,7 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
+import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
@@ -28,6 +29,7 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
+	private transcriptInvalidationHandler: TranscriptItemInvalidationHandler;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
@@ -62,6 +64,10 @@ export class BashExecutionComponent extends Container {
 
 		// Bottom border
 		this.addChild(new DynamicBorder(borderColor));
+	}
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.transcriptInvalidationHandler = handler;
 	}
 
 	/**
@@ -202,6 +208,7 @@ export class BashExecutionComponent extends Container {
 				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
 			}
 		}
+		this.transcriptInvalidationHandler?.();
 	}
 
 	/**
