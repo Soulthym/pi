@@ -19,6 +19,10 @@ import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } fro
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
+const ENTER_FULLSCREEN = "\x1b[?1049h\x1b[?1000h\x1b[?1006h";
+const EXIT_FULLSCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
+
+export type ScreenMode = "inline" | "fullscreen";
 
 interface KittyImageHeader {
 	ids: number[];
@@ -314,7 +318,8 @@ export class TUI extends Container {
 	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
-	private stopped = false;
+	private stopped = true;
+	private screenMode: ScreenMode = "inline";
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
@@ -337,6 +342,21 @@ export class TUI extends Container {
 
 	get fullRedraws(): number {
 		return this.fullRedrawCount;
+	}
+
+	getScreenMode(): ScreenMode {
+		return this.screenMode;
+	}
+
+	/**
+	 * Select how the TUI owns the terminal. The low-level TUI remains inline by
+	 * default so existing embedders keep their current terminal behavior.
+	 */
+	setScreenMode(mode: ScreenMode): void {
+		if (!this.stopped) {
+			throw new Error("Cannot change TUI screen mode while it is running");
+		}
+		this.screenMode = mode;
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -635,11 +655,18 @@ export class TUI extends Container {
 	}
 
 	start(): void {
+		if (!this.stopped) return;
 		this.stopped = false;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (this.screenMode === "fullscreen") {
+			// Button/wheel tracking plus SGR coordinates works across common
+			// desktop terminals and Termux. Text selection keeps each terminal's
+			// standard mouse-reporting escape hatch (for example Shift-drag).
+			this.terminal.write(ENTER_FULLSCREEN);
+		}
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
@@ -687,6 +714,7 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		if (this.stopped) return;
 		this.stopped = true;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
@@ -695,8 +723,9 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
+		// Inline mode leaves the cursor after its scrollback content. Fullscreen
+		// mode instead restores the saved primary screen without adding text.
+		if (this.screenMode === "inline" && this.previousLines.length > 0) {
 			// Overwrite the inverted cursor with a normal space to clear the artifact
 			this.terminal.write(" ");
 			const targetRow = this.previousLines.length; // Line after the last content
@@ -709,6 +738,9 @@ export class TUI extends Container {
 			this.terminal.write("\r\n");
 		}
 
+		if (this.screenMode === "fullscreen") {
+			this.terminal.write(EXIT_FULLSCREEN);
+		}
 		this.terminal.showCursor();
 		this.terminal.stop();
 	}
