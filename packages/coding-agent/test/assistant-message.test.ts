@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { Container } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -114,6 +115,45 @@ describe("AssistantMessageComponent", () => {
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
 		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
 		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
+	});
+
+	test("preserves completed render blocks while replacing only a changed streaming tail", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "completed reasoning" },
+				{ type: "text", text: "partial" },
+			]),
+		);
+		const contentContainer = component.children[0] as Container;
+		const initialThinking = contentContainer.children[1];
+		const initialThinkingSpacer = contentContainer.children[2];
+		const initialText = contentContainer.children[3];
+
+		component.updateContent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "completed reasoning" },
+				{ type: "text", text: "partial response" },
+			]),
+		);
+
+		expect(contentContainer.children[1]).toBe(initialThinking);
+		expect(contentContainer.children[2]).toBe(initialThinkingSpacer);
+		expect(contentContainer.children[3]).not.toBe(initialText);
+		const updatedText = contentContainer.children[3];
+
+		component.updateContent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "completed reasoning" },
+				{ type: "text", text: "partial response" },
+			]),
+		);
+
+		expect(contentContainer.children[1]).toBe(initialThinking);
+		expect(contentContainer.children[2]).toBe(initialThinkingSpacer);
+		expect(contentContainer.children[3]).toBe(updatedText);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("partial response");
 	});
 
 	test("uses configured output padding for user messages", () => {
