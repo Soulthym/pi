@@ -112,6 +112,7 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { FullscreenLayout } from "./components/fullscreen-layout.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
@@ -133,12 +134,14 @@ import {
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
+import { TranscriptViewport } from "./components/transcript-viewport.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getModelSearchText } from "./model-search.ts";
+import { resolveInteractiveScreenMode } from "./screen-mode.ts";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -319,7 +322,7 @@ export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
 	private loadedResourcesContainer: Container;
-	private chatContainer: Container;
+	private chatContainer: TranscriptViewport;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -330,6 +333,7 @@ export class InteractiveMode {
 	private fdPath: string | undefined;
 	private editorContainer: Container;
 	private footer: FooterComponent;
+	private footerContainer: Container;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -452,10 +456,11 @@ export class InteractiveMode {
 		});
 		this.version = VERSION;
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor(), getAgentDir());
+		this.ui.setScreenMode(resolveInteractiveScreenMode());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
-		this.chatContainer = new Container();
+		this.chatContainer = new TranscriptViewport();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
@@ -473,6 +478,8 @@ export class InteractiveMode {
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footerContainer = new Container();
+		this.footerContainer.addChild(this.footer);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 
 		// Load hide thinking block setting
@@ -699,19 +706,32 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child. Populate it after applying theme settings.
-		// Keep loaded resources before chat so restored session messages never precede them.
-		this.ui.addChild(this.headerContainer);
-		this.ui.addChild(this.loadedResourcesContainer);
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
+		if (this.ui.getScreenMode() === "fullscreen") {
+			this.ui.addChild(
+				new FullscreenLayout({
+					getHeight: () => this.ui.terminal.rows,
+					top: [this.headerContainer, this.loadedResourcesContainer],
+					transcript: this.chatContainer,
+					status: [this.pendingMessagesContainer, this.statusContainer],
+					widgetsAbove: [this.widgetContainerAbove],
+					editor: this.editorContainer,
+					widgetsBelow: [this.widgetContainerBelow],
+					footer: this.footerContainer,
+				}),
+			);
+		} else {
+			// Preserve the existing scrollback-oriented tree in inline mode.
+			this.ui.addChild(this.headerContainer);
+			this.ui.addChild(this.loadedResourcesContainer);
+			this.ui.addChild(this.chatContainer);
+			this.ui.addChild(this.pendingMessagesContainer);
+			this.ui.addChild(this.statusContainer);
+			this.ui.addChild(this.widgetContainerAbove);
+			this.ui.addChild(this.editorContainer);
+			this.ui.addChild(this.widgetContainerBelow);
+			this.ui.addChild(this.footerContainer);
+		}
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
@@ -2027,28 +2047,18 @@ export class InteractiveMode {
 			| ((tui: TUI, thm: Theme, footerData: ReadonlyFooterDataProvider) => Component & { dispose?(): void })
 			| undefined,
 	): void {
-		// Dispose existing custom footer
 		if (this.customFooter?.dispose) {
 			this.customFooter.dispose();
 		}
 
-		// Remove current footer from UI
-		if (this.customFooter) {
-			this.ui.removeChild(this.customFooter);
-		} else {
-			this.ui.removeChild(this.footer);
-		}
-
+		this.footerContainer.clear();
 		if (factory) {
-			// Create and add custom footer, passing the data provider
 			this.customFooter = factory(this.ui, theme, this.footerDataProvider);
-			this.ui.addChild(this.customFooter);
+			this.footerContainer.addChild(this.customFooter);
 		} else {
-			// Restore built-in footer
 			this.customFooter = undefined;
-			this.ui.addChild(this.footer);
+			this.footerContainer.addChild(this.footer);
 		}
-
 		this.ui.requestRender();
 	}
 
@@ -3183,6 +3193,7 @@ export class InteractiveMode {
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
 			this.lastStatusText.setText(theme.fg("dim", message));
+			this.chatContainer.invalidateItem?.(this.lastStatusText);
 			this.ui.requestRender();
 			return;
 		}
@@ -3210,7 +3221,7 @@ export class InteractiveMode {
 		if (this.streamingComponent) {
 			const streamingIndex = this.chatContainer.children.indexOf(this.streamingComponent);
 			if (streamingIndex >= 0) {
-				this.chatContainer.children.splice(streamingIndex, 0, component);
+				this.chatContainer.insertChildBefore(component, this.streamingComponent);
 				return;
 			}
 		}
@@ -3799,6 +3810,7 @@ export class InteractiveMode {
 			for (const child of container.children) {
 				if (isExpandable(child)) {
 					child.setExpanded(expanded);
+					if (container === this.chatContainer) this.chatContainer.invalidateItem?.(child);
 				}
 			}
 		}
