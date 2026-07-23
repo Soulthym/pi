@@ -104,6 +104,21 @@ describe("TranscriptViewport virtualization", () => {
 		);
 		assert.equal(items[99].renderCount, 0);
 	});
+	it("keeps render work flat across large transcript sizes", () => {
+		const measure = (itemCount: number): { initialCalls: number; idleCalls: number; visibleLines: number } => {
+			const viewport = new TranscriptViewport({ height: 24, overscanRows: 24 });
+			const items = createSingleLineItems(itemCount);
+			addItems(viewport, items);
+			const visibleLines = viewport.render(80).length;
+			const initialCalls = items.reduce((total, item) => total + item.renderCount, 0);
+			viewport.render(80);
+			const callsAfterIdle = items.reduce((total, item) => total + item.renderCount, 0);
+			return { initialCalls, idleCalls: callsAfterIdle - initialCalls, visibleLines };
+		};
+
+		assert.deepEqual(measure(100), { initialCalls: 48, idleCalls: 0, visibleLines: 24 });
+		assert.deepEqual(measure(10_000), { initialCalls: 48, idleCalls: 0, visibleLines: 24 });
+	});
 });
 
 describe("TranscriptViewport anchors", () => {
