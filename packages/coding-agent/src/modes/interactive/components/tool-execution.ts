@@ -4,6 +4,7 @@ import { createAllToolDefinitions, type ToolName } from "../../../core/tools/ind
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
+import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
@@ -39,6 +40,7 @@ export class ToolExecutionComponent extends Container {
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	private hideComponent = false;
+	private transcriptInvalidationHandler: TranscriptItemInvalidationHandler;
 
 	constructor(
 		toolName: string,
@@ -76,6 +78,10 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		this.updateDisplay();
+	}
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.transcriptInvalidationHandler = handler;
 	}
 
 	private getCallRenderer(): ToolDefinition<any, any>["renderCall"] | undefined {
@@ -356,6 +362,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.hasRendererDefinition() && !hasContent && this.imageComponents.length === 0) {
 			this.hideComponent = true;
 		}
+		this.transcriptInvalidationHandler?.();
 	}
 
 	private getTextOutput(): string {

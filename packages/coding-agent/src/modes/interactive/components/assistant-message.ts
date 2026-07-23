@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -17,6 +18,7 @@ export class AssistantMessageComponent extends Container {
 	private outputPad: number;
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
+	private transcriptInvalidationHandler: TranscriptItemInvalidationHandler;
 
 	constructor(
 		message?: AssistantMessage,
@@ -39,6 +41,10 @@ export class AssistantMessageComponent extends Container {
 		if (message) {
 			this.updateContent(message);
 		}
+	}
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.transcriptInvalidationHandler = handler;
 	}
 
 	override invalidate(): void {
@@ -176,5 +182,6 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}
+		this.transcriptInvalidationHandler?.();
 	}
 }
