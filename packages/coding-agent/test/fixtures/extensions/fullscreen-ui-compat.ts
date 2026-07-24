@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { matchesKey, Text } from "../../../../tui/src/index.ts";
+import { matchesKey, Text, truncateToWidth } from "../../../../tui/src/index.ts";
 import { CustomEditor, type ExtensionAPI } from "../../../src/index.ts";
 
 class CompatibilityEditor extends CustomEditor {}
@@ -46,9 +46,18 @@ export default function fullscreenUiCompatibilityExtension(pi: ExtensionAPI): vo
 		if (context.mode !== "tui") return;
 
 		context.ui.setHeader((_tui, theme) => new Text(theme.fg("accent", "compat header"), 1, 0));
-		context.ui.setFooter((_tui, theme, footerData) => {
-			const footer = new Text(theme.fg("dim", footerData.getGitBranch() ?? "no branch"), 1, 0);
-			return Object.assign(footer, { dispose: footerData.onBranchChange(() => {}) });
+		context.ui.setFooter((tui, theme, footerData) => {
+			const dispose = footerData.onBranchChange(() => tui.requestRender());
+			return {
+				dispose,
+				invalidate() {},
+				render() {
+					const branch = footerData.getGitBranch() ?? "no branch";
+					const statuses = Array.from(footerData.getExtensionStatuses().values());
+					const suffix = statuses.length > 0 ? ` ${statuses.join(" ")}` : "";
+					return [theme.fg("dim", `${branch}${suffix}`)];
+				},
+			};
 		});
 		context.ui.setWidget("compat-above", ["above"], { placement: "aboveEditor" });
 		context.ui.setWidget("compat-below", (_tui, theme) => new Text(theme.fg("muted", "below"), 1, 0), {
@@ -62,14 +71,49 @@ export default function fullscreenUiCompatibilityExtension(pi: ExtensionAPI): vo
 		});
 	});
 
+	pi.registerCommand("fullscreen-compat-transcript", {
+		description: "Exercise custom message and entry transcript rendering.",
+		async handler() {
+			pi.sendMessage({
+				customType: "fullscreen-compat-message",
+				content: "compat message",
+				display: true,
+			});
+			pi.appendEntry("fullscreen-compat-entry", { label: "compat entry" });
+		},
+	});
+
+	// ctx.ui.custom() focuses the returned root, so input handling must live on
+	// that component rather than a child of Container, which does not forward it.
+	pi.registerCommand("fullscreen-compat-custom", {
+		description: "Exercise non-overlay custom UI rendering.",
+		async handler(_args, context) {
+			await context.ui.custom<void>((_tui, theme, _keybindings, done) => ({
+				render: () => [theme.fg("accent", "compat custom UI"), "press any key"],
+				handleInput: () => done(),
+				invalidate() {},
+			}));
+		},
+	});
+
 	pi.registerCommand("fullscreen-compat-overlay", {
 		description: "Exercise custom overlay rendering.",
 		async handler(_args, context) {
 			await context.ui.custom<void>(
-				// ctx.ui.custom() focuses the returned root, so input handling must
-				// live here rather than on a child of non-forwarding Container.
 				(_tui, theme, _keybindings, done) => ({
-					render: () => [theme.fg("accent", "compat overlay"), "", "press any key"],
+					render: (width) => {
+						const innerWidth = Math.max(1, width - 2);
+						const border = (text: string) => theme.fg("border", text);
+						const line = (text: string) =>
+							border("│") + truncateToWidth(text, innerWidth, "...", true) + border("│");
+						return [
+							border(`╭${"─".repeat(innerWidth)}╮`),
+							line(theme.fg("accent", " compat overlay")),
+							line(""),
+							line(" press any key"),
+							border(`╰${"─".repeat(innerWidth)}╯`),
+						];
+					},
 					handleInput: () => done(),
 					invalidate() {},
 				}),
