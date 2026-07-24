@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { Text } from "../../../../tui/src/index.ts";
+import { matchesKey, Text } from "../../../../tui/src/index.ts";
 import { CustomEditor, type ExtensionAPI } from "../../../src/index.ts";
 
 class CompatibilityEditor extends CustomEditor {}
@@ -55,6 +55,11 @@ export default function fullscreenUiCompatibilityExtension(pi: ExtensionAPI): vo
 			placement: "belowEditor",
 		});
 		context.ui.setEditorComponent((tui, theme, keybindings) => new CompatibilityEditor(tui, theme, keybindings));
+		context.ui.onTerminalInput((data) => {
+			if (!matchesKey(data, "ctrl+up")) return;
+			context.ui.setStatus("compat-input", "extension captured Ctrl+Up");
+			return { consume: true };
+		});
 	});
 
 	pi.registerCommand("fullscreen-compat-overlay", {
