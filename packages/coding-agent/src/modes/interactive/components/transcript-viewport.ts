@@ -54,6 +54,7 @@ export class TranscriptViewport extends Container {
 	private anchor: ViewportAnchor | undefined;
 	private lastFrameTop: ViewportAnchor | undefined;
 	private lastWidth: number | undefined;
+	private pendingOutput = false;
 
 	constructor(options: TranscriptViewportOptions = {}) {
 		super();
@@ -74,6 +75,7 @@ export class TranscriptViewport extends Container {
 		this.itemIndices.set(component, this.children.length - 1);
 		this.ensureItemState(component);
 		this.attachInvalidationHandler(component);
+		if (this.anchor) this.pendingOutput = true;
 	}
 
 	insertChildBefore(component: Component, before: Component): void {
@@ -86,6 +88,7 @@ export class TranscriptViewport extends Container {
 		this.ensureItemState(component);
 		this.attachInvalidationHandler(component);
 		this.reindexFrom(index);
+		if (this.anchor) this.pendingOutput = true;
 	}
 
 	override removeChild(component: Component): void {
@@ -115,9 +118,11 @@ export class TranscriptViewport extends Container {
 		this.totalCachedLines = 0;
 		this.anchor = undefined;
 		this.lastFrameTop = undefined;
+		this.pendingOutput = false;
 	}
 
 	override invalidate(): void {
+		const pendingOutput = this.pendingOutput;
 		super.invalidate();
 		for (const component of this.leadingComponents) component.invalidate?.();
 		this.cache.invalidateAll();
@@ -128,9 +133,11 @@ export class TranscriptViewport extends Container {
 			state.measuredHeight = undefined;
 			state.cachedLineCount = 0;
 		}
+		this.pendingOutput = pendingOutput;
 	}
 
 	invalidateItem(component: Component): void {
+		if (this.anchor) this.pendingOutput = true;
 		const state = this.ensureItemState(component);
 		state.version += 1;
 		state.measuredWidth = undefined;
@@ -165,6 +172,10 @@ export class TranscriptViewport extends Container {
 		return this.anchor === undefined;
 	}
 
+	hasPendingOutput(): boolean {
+		return this.pendingOutput;
+	}
+
 	scrollToTop(): void {
 		const first = this.getItemAt(0);
 		this.anchor = first ? { component: first, lineOffset: 0 } : undefined;
@@ -172,6 +183,12 @@ export class TranscriptViewport extends Container {
 
 	scrollToBottom(): void {
 		this.anchor = undefined;
+		this.pendingOutput = false;
+	}
+
+	scrollByPages(pages: number): void {
+		const pageRows = Math.max(1, (this.viewportHeight ?? 1) - 1);
+		this.scrollByLines(pages * pageRows);
 	}
 
 	scrollByLines(lines: number): void {
@@ -183,6 +200,19 @@ export class TranscriptViewport extends Container {
 			lines < 0
 				? this.moveAnchorUp(startingAnchor, -lines, this.lastWidth)
 				: this.moveAnchorDown(startingAnchor, lines, this.lastWidth);
+		if (lines > 0 && this.anchor && this.isTailVisibleFrom(this.anchor, this.lastWidth)) {
+			this.scrollToBottom();
+		}
+	}
+
+	handleMouseInput(data: string): boolean {
+		const match = data.match(/^\x1b\[<(\d+);\d+;\d+([Mm])$/);
+		if (!match || match[2] !== "M") return false;
+		const button = Number(match[1]);
+		const wheelButton = button & 3;
+		if ((button & 64) === 0 || wheelButton > 1) return false;
+		this.scrollByLines(wheelButton === 0 ? -3 : 3);
+		return true;
 	}
 
 	override render(width: number): string[] {
@@ -227,7 +257,7 @@ export class TranscriptViewport extends Container {
 		if (!anchor) return this.renderFromTail(width, activeItems);
 		const anchorIndex = this.resolveItemIndex(anchor.component);
 		if (anchorIndex === -1) {
-			this.anchor = undefined;
+			this.scrollToBottom();
 			return this.renderFromTail(width, activeItems);
 		}
 
@@ -251,10 +281,26 @@ export class TranscriptViewport extends Container {
 		const visibleLines = allLines.slice(0, viewportHeight);
 		this.lastFrameTop = this.findTopAnchor(rendered, 0);
 		if (lastRenderedIndex === this.getItemCount() - 1 && allLines.length <= viewportHeight) {
-			this.anchor = undefined;
+			this.scrollToBottom();
 			return this.renderFromTail(width, activeItems);
 		}
 		return visibleLines;
+	}
+
+	private isTailVisibleFrom(anchor: ViewportAnchor, width: number): boolean {
+		let index = this.resolveItemIndex(anchor.component);
+		if (index === -1) return false;
+		let remainingRows = this.viewportHeight ?? 0;
+		for (; index < this.getItemCount(); index++) {
+			const component = this.getItemAt(index);
+			if (!component) continue;
+			const lines = this.renderItem(component, width);
+			const lineOffset = component === anchor.component ? Math.min(anchor.lineOffset, lines.length) : 0;
+			const availableRows = Math.max(0, lines.length - lineOffset);
+			if (availableRows > remainingRows) return false;
+			remainingRows -= availableRows;
+		}
+		return true;
 	}
 
 	private renderItem(component: Component, width: number): readonly string[] {

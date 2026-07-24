@@ -187,6 +187,20 @@ class ExpandableText extends Text implements Expandable {
 	}
 }
 
+class TranscriptScrollStatus implements Component {
+	private readonly transcript: TranscriptViewport;
+
+	constructor(transcript: TranscriptViewport) {
+		this.transcript = transcript;
+	}
+
+	render(_width: number): string[] {
+		return this.transcript.hasPendingOutput() ? [theme.fg("accent", "↓ New output")] : [];
+	}
+
+	invalidate(): void {}
+}
+
 type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
@@ -407,6 +421,7 @@ export class InteractiveMode {
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
+	private transcriptInputUnsubscribe: (() => void) | undefined;
 
 	// Extension widgets (components rendered above/below the editor)
 	private extensionWidgetsAbove = new Map<string, Component & { dispose?(): void }>();
@@ -716,7 +731,11 @@ export class InteractiveMode {
 					getHeight: () => this.ui.terminal.rows,
 					top: [],
 					transcript: this.chatContainer,
-					status: [this.pendingMessagesContainer, this.statusContainer],
+					status: [
+						new TranscriptScrollStatus(this.chatContainer),
+						this.pendingMessagesContainer,
+						this.statusContainer,
+					],
 					widgetsAbove: [this.widgetContainerAbove],
 					editor: this.editorContainer,
 					widgetsBelow: [this.widgetContainerBelow],
@@ -738,6 +757,7 @@ export class InteractiveMode {
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
+		this.setupTranscriptInput();
 		this.setupEditorSubmitHandler();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
@@ -2622,6 +2642,46 @@ export class InteractiveMode {
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
 		};
+	}
+
+	private setupTranscriptInput(): void {
+		this.transcriptInputUnsubscribe?.();
+		this.transcriptInputUnsubscribe = undefined;
+		if (this.ui.getScreenMode() !== "fullscreen") return;
+
+		this.transcriptInputUnsubscribe = this.ui.addInputListener((data) => {
+			if (this.ui.hasOverlay() || !this.editorContainer.children.includes(this.editor as Component)) {
+				return;
+			}
+			const editorWithAutocomplete = this.editor as EditorComponent & { isShowingAutocomplete?(): boolean };
+			if (editorWithAutocomplete.isShowingAutocomplete?.()) return;
+
+			if (this.chatContainer.handleMouseInput(data)) {
+				this.ui.requestRender();
+				return { consume: true };
+			}
+
+			let handled = true;
+			if (this.keybindings.matches(data, "app.transcript.lineUp")) {
+				this.chatContainer.scrollByLines(-1);
+			} else if (this.keybindings.matches(data, "app.transcript.lineDown")) {
+				this.chatContainer.scrollByLines(1);
+			} else if (this.keybindings.matches(data, "app.transcript.pageUp")) {
+				this.chatContainer.scrollByPages(-1);
+			} else if (this.keybindings.matches(data, "app.transcript.pageDown")) {
+				this.chatContainer.scrollByPages(1);
+			} else if (this.keybindings.matches(data, "app.transcript.top")) {
+				this.chatContainer.scrollToTop();
+			} else if (this.keybindings.matches(data, "app.transcript.bottom")) {
+				this.chatContainer.scrollToBottom();
+			} else {
+				handled = false;
+			}
+
+			if (!handled) return;
+			this.ui.requestRender();
+			return { consume: true };
+		});
 	}
 
 	private async handleClipboardPaste(): Promise<void> {
@@ -5732,6 +5792,13 @@ export class InteractiveMode {
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
 
+		const transcriptLineUp = this.getAppKeyDisplay("app.transcript.lineUp");
+		const transcriptLineDown = this.getAppKeyDisplay("app.transcript.lineDown");
+		const transcriptPageUp = this.getAppKeyDisplay("app.transcript.pageUp");
+		const transcriptPageDown = this.getAppKeyDisplay("app.transcript.pageDown");
+		const transcriptTop = this.getAppKeyDisplay("app.transcript.top");
+		const transcriptBottom = this.getAppKeyDisplay("app.transcript.bottom");
+
 		// Editing keybindings
 		const submit = this.getEditorKeyDisplay("tui.input.submit");
 		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
@@ -5772,6 +5839,14 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+
+**Transcript (fullscreen)**
+| Key | Action |
+|-----|--------|
+| \`${transcriptLineUp}\` / \`${transcriptLineDown}\` | Scroll transcript by line |
+| \`${transcriptPageUp}\` / \`${transcriptPageDown}\` | Scroll transcript by page |
+| \`${transcriptTop}\` | Jump to transcript top |
+| \`${transcriptBottom}\` | Follow live output |
 
 **Editing**
 | Key | Action |
@@ -6009,6 +6084,8 @@ export class InteractiveMode {
 		}
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
+		this.transcriptInputUnsubscribe?.();
+		this.transcriptInputUnsubscribe = undefined;
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();

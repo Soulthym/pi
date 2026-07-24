@@ -34,6 +34,11 @@ class NotifyingComponent extends CountingComponent {
 		this.invalidationHandler = handler;
 	}
 
+	override invalidate(): void {
+		super.invalidate();
+		this.invalidationHandler?.();
+	}
+
 	setLines(lines: string[]): void {
 		this.lines = lines;
 		this.invalidationHandler?.();
@@ -186,18 +191,40 @@ describe("TranscriptViewport anchors", () => {
 	it("keeps an item-and-line anchor stable when new output arrives", () => {
 		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
 		const items = createSingleLineItems(10);
+		items[9] = new NotifyingComponent(["item-9"]);
 		addItems(viewport, items);
 		assert.deepEqual(viewport.render(80), ["item-7", "item-8", "item-9"]);
 
 		viewport.scrollByLines(-2);
 		assert.deepEqual(viewport.render(80), ["item-5", "item-6", "item-7"]);
 		assert.equal(viewport.isFollowingTail(), false);
+		assert.equal(viewport.hasPendingOutput(), false);
+
+		viewport.invalidate();
+		assert.equal(viewport.hasPendingOutput(), false);
 
 		viewport.addChild(new CountingComponent(["item-10"]));
 		assert.deepEqual(viewport.render(80), ["item-5", "item-6", "item-7"]);
+		assert.equal(viewport.hasPendingOutput(), true);
 
 		viewport.scrollToBottom();
 		assert.deepEqual(viewport.render(80), ["item-8", "item-9", "item-10"]);
+		assert.equal(viewport.isFollowingTail(), true);
+		assert.equal(viewport.hasPendingOutput(), false);
+	});
+
+	it("handles vertical SGR wheel input in bounded line increments", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		addItems(viewport, createSingleLineItems(10));
+		assert.deepEqual(viewport.render(80), ["item-7", "item-8", "item-9"]);
+
+		assert.equal(viewport.handleMouseInput("\x1b[<64;20;5M"), true);
+		assert.deepEqual(viewport.render(80), ["item-4", "item-5", "item-6"]);
+		assert.equal(viewport.handleMouseInput("\x1b[<64;20;5m"), false);
+		assert.equal(viewport.handleMouseInput("\x1b[<0;20;5M"), false);
+
+		assert.equal(viewport.handleMouseInput("\x1b[<65;20;5M"), true);
+		assert.deepEqual(viewport.render(80), ["item-7", "item-8", "item-9"]);
 		assert.equal(viewport.isFollowingTail(), true);
 	});
 
