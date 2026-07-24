@@ -214,6 +214,7 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
+const TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS = 1000;
 
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
@@ -221,6 +222,29 @@ function isDeadTerminalError(error: unknown): boolean {
 	}
 	const code = (error as NodeJS.ErrnoException).code;
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
+}
+
+async function flushTerminalOutput(): Promise<void> {
+	if (!process.stdout.isTTY) return;
+
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			resolve();
+		};
+		const timeout = setTimeout(finish, TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS);
+
+		try {
+			// A non-empty final write is a stream-ordering barrier; process.exit()
+			// may otherwise truncate terminal restoration sequences on slow ttys.
+			process.stdout.write("\x1b[0m", finish);
+		} catch {
+			finish();
+		}
+	});
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
@@ -3631,6 +3655,7 @@ export class InteractiveMode {
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
+			await flushTerminalOutput();
 			process.exit(0);
 		}
 
@@ -3650,6 +3675,7 @@ export class InteractiveMode {
 			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
 		}
 
+		await flushTerminalOutput();
 		process.exit(0);
 	}
 
