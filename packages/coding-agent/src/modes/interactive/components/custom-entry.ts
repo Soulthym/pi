@@ -3,12 +3,14 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { EntryRenderer } from "../../../core/extensions/types.ts";
 import type { CustomEntry } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
+import type { TranscriptItemCachePolicySource } from "./transcript-viewport.ts";
 
 /**
  * Component that renders a custom session entry from extensions.
  * The host owns transcript spacing; renderer output should provide only its content.
  */
-export class CustomEntryComponent extends Container {
+export class CustomEntryComponent extends Container implements TranscriptItemCachePolicySource {
+	readonly transcriptItemCachePolicy = "uncached" as const;
 	private entry: CustomEntry<unknown>;
 	private renderer: EntryRenderer;
 	private customComponent?: Component;
