@@ -43,6 +43,9 @@ export class TranscriptViewport extends Container {
 	private readonly cache = new ComponentRenderCache();
 	private readonly itemStates = new Map<Component, ItemState>();
 	private readonly itemIndices = new Map<Component, number>();
+	// Startup regions scroll with the transcript but remain separately owned so
+	// clearing conversation messages cannot remove the header or resource list.
+	private leadingComponents: readonly Component[] = [];
 	private viewportHeight: number | undefined;
 	private overscanRows: number | undefined;
 	private maxCachedLines: number | undefined;
@@ -58,6 +61,12 @@ export class TranscriptViewport extends Container {
 		this.overscanRows = options.overscanRows === undefined ? undefined : this.normalizeRowCount(options.overscanRows);
 		this.maxCachedLines =
 			options.maxCachedLines === undefined ? undefined : this.normalizeRowCount(options.maxCachedLines);
+	}
+
+	setLeadingComponents(components: readonly Component[]): void {
+		this.leadingComponents = [...components];
+		if (this.anchor && this.resolveItemIndex(this.anchor.component) === -1) this.anchor = undefined;
+		this.lastFrameTop = undefined;
 	}
 
 	override addChild(component: Component): void {
@@ -84,7 +93,8 @@ export class TranscriptViewport extends Container {
 		if (index === -1) return;
 
 		if (this.anchor?.component === component) {
-			const replacement = this.children[index + 1] ?? this.children[index - 1];
+			const logicalIndex = this.leadingComponents.length + index;
+			const replacement = this.getItemAt(logicalIndex + 1) ?? this.getItemAt(logicalIndex - 1);
 			this.anchor = replacement ? { component: replacement, lineOffset: 0 } : undefined;
 		}
 		if (this.lastFrameTop?.component === component) {
@@ -109,6 +119,7 @@ export class TranscriptViewport extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		for (const component of this.leadingComponents) component.invalidate?.();
 		this.cache.invalidateAll();
 		this.totalCachedLines = 0;
 		for (const state of this.itemStates.values()) {
@@ -155,7 +166,7 @@ export class TranscriptViewport extends Container {
 	}
 
 	scrollToTop(): void {
-		const first = this.children[0];
+		const first = this.getItemAt(0);
 		this.anchor = first ? { component: first, lineOffset: 0 } : undefined;
 	}
 
@@ -164,7 +175,7 @@ export class TranscriptViewport extends Container {
 	}
 
 	scrollByLines(lines: number): void {
-		if (lines === 0 || this.lastWidth === undefined || this.children.length === 0) return;
+		if (lines === 0 || this.lastWidth === undefined || this.getItemCount() === 0) return;
 		const startingAnchor = this.anchor ?? this.lastFrameTop;
 		if (!startingAnchor) return;
 
@@ -177,7 +188,7 @@ export class TranscriptViewport extends Container {
 	override render(width: number): string[] {
 		this.lastWidth = width;
 		if (this.viewportHeight === undefined) return super.render(width);
-		if (this.viewportHeight === 0 || this.children.length === 0) {
+		if (this.viewportHeight === 0 || this.getItemCount() === 0) {
 			this.lastFrameTop = undefined;
 			this.evictInactiveItems(new Set());
 			return [];
@@ -195,8 +206,9 @@ export class TranscriptViewport extends Container {
 		const rendered: RenderedItem[] = [];
 		let renderedRows = 0;
 
-		for (let index = this.children.length - 1; index >= 0 && renderedRows < targetRows; index--) {
-			const component = this.children[index];
+		for (let index = this.getItemCount() - 1; index >= 0 && renderedRows < targetRows; index--) {
+			const component = this.getItemAt(index);
+			if (!component) continue;
 			const lines = this.renderItem(component, width);
 			activeItems.add(component);
 			rendered.unshift({ component, lines, lineOffset: 0 });
@@ -224,8 +236,9 @@ export class TranscriptViewport extends Container {
 		let renderedRows = 0;
 		let lastRenderedIndex = anchorIndex - 1;
 
-		for (let index = anchorIndex; index < this.children.length && renderedRows < targetRows; index++) {
-			const component = this.children[index];
+		for (let index = anchorIndex; index < this.getItemCount() && renderedRows < targetRows; index++) {
+			const component = this.getItemAt(index);
+			if (!component) continue;
 			const lines = this.renderItem(component, width);
 			const lineOffset = index === anchorIndex ? Math.min(anchor.lineOffset, lines.length) : 0;
 			activeItems.add(component);
@@ -237,7 +250,7 @@ export class TranscriptViewport extends Container {
 		const allLines = this.flattenRenderedItems(rendered);
 		const visibleLines = allLines.slice(0, viewportHeight);
 		this.lastFrameTop = this.findTopAnchor(rendered, 0);
-		if (lastRenderedIndex === this.children.length - 1 && allLines.length <= viewportHeight) {
+		if (lastRenderedIndex === this.getItemCount() - 1 && allLines.length <= viewportHeight) {
 			this.anchor = undefined;
 			return this.renderFromTail(width, activeItems);
 		}
@@ -245,6 +258,11 @@ export class TranscriptViewport extends Container {
 	}
 
 	private renderItem(component: Component, width: number): readonly string[] {
+		// Leading containers can change internally without an item-level version.
+		// Render them directly while visible; offscreen virtualization still skips them.
+		if (this.leadingComponents.includes(component)) {
+			return component.render(width);
+		}
 		const state = this.ensureItemState(component);
 		const result = this.cache.render(component, width, state.version);
 		state.lastUsed = ++this.useCounter;
@@ -284,7 +302,9 @@ export class TranscriptViewport extends Container {
 	private moveAnchorUp(anchor: ViewportAnchor, rows: number, width: number): ViewportAnchor {
 		let index = this.resolveItemIndex(anchor.component);
 		if (index === -1) return anchor;
-		let offset = Math.min(anchor.lineOffset, this.renderItem(this.children[index], width).length);
+		let component = this.getItemAt(index);
+		if (!component) return anchor;
+		let offset = Math.min(anchor.lineOffset, this.renderItem(component, width).length);
 		let remaining = rows;
 
 		while (remaining > 0) {
@@ -299,19 +319,24 @@ export class TranscriptViewport extends Container {
 				offset = 0;
 				break;
 			}
-			offset = this.renderItem(this.children[index], width).length;
+			component = this.getItemAt(index);
+			offset = component ? this.renderItem(component, width).length : 0;
 		}
-		return { component: this.children[index], lineOffset: offset };
+		return { component: this.getItemAt(index) ?? anchor.component, lineOffset: offset };
 	}
 
 	private moveAnchorDown(anchor: ViewportAnchor, rows: number, width: number): ViewportAnchor {
 		let index = this.resolveItemIndex(anchor.component);
 		if (index === -1) return anchor;
-		let offset = Math.min(anchor.lineOffset, this.renderItem(this.children[index], width).length);
+		let component = this.getItemAt(index);
+		if (!component) return anchor;
+		let offset = Math.min(anchor.lineOffset, this.renderItem(component, width).length);
 		let remaining = rows;
 
 		while (remaining > 0) {
-			const lines = this.renderItem(this.children[index], width);
+			component = this.getItemAt(index);
+			if (!component) break;
+			const lines = this.renderItem(component, width);
 			const availableRows = Math.max(0, lines.length - offset);
 			if (availableRows >= remaining) {
 				offset += remaining;
@@ -319,14 +344,15 @@ export class TranscriptViewport extends Container {
 			}
 			remaining -= availableRows;
 			index += 1;
-			if (index >= this.children.length) {
-				index = this.children.length - 1;
-				offset = this.renderItem(this.children[index], width).length;
+			if (index >= this.getItemCount()) {
+				index = this.getItemCount() - 1;
+				component = this.getItemAt(index);
+				offset = component ? this.renderItem(component, width).length : 0;
 				break;
 			}
 			offset = 0;
 		}
-		return { component: this.children[index], lineOffset: offset };
+		return { component: this.getItemAt(index) ?? anchor.component, lineOffset: offset };
 	}
 
 	private attachInvalidationHandler(component: Component): void {
@@ -382,11 +408,25 @@ export class TranscriptViewport extends Container {
 	}
 
 	private resolveItemIndex(component: Component): number {
+		const leadingIndex = this.leadingComponents.indexOf(component);
+		if (leadingIndex !== -1) return leadingIndex;
 		const indexed = this.itemIndices.get(component);
-		if (indexed !== undefined && this.children[indexed] === component) return indexed;
+		if (indexed !== undefined && this.children[indexed] === component) {
+			return this.leadingComponents.length + indexed;
+		}
 		const actual = this.children.indexOf(component);
 		if (actual !== -1) this.itemIndices.set(component, actual);
-		return actual;
+		return actual === -1 ? -1 : this.leadingComponents.length + actual;
+	}
+
+	private getItemCount(): number {
+		return this.leadingComponents.length + this.children.length;
+	}
+
+	private getItemAt(index: number): Component | undefined {
+		if (index < 0) return undefined;
+		if (index < this.leadingComponents.length) return this.leadingComponents[index];
+		return this.children[index - this.leadingComponents.length];
 	}
 
 	private reindexFrom(start: number): void {

@@ -58,6 +58,27 @@ describe("TranscriptViewport virtualization", () => {
 		assert.equal(viewport.getViewportHeight(), undefined);
 	});
 
+	it("scrolls separately owned startup items and preserves them across conversation clears", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		const header = new CountingComponent(["header"]);
+		const resources = new CountingComponent(["resources"]);
+		viewport.setLeadingComponents([header, resources]);
+		addItems(viewport, createSingleLineItems(5));
+
+		assert.deepEqual(viewport.render(80), ["item-2", "item-3", "item-4"]);
+		assert.equal(header.renderCount, 0);
+		assert.equal(resources.renderCount, 0);
+
+		viewport.scrollToTop();
+		assert.deepEqual(viewport.render(80), ["header", "resources", "item-0"]);
+
+		header.lines = ["updated-header"];
+		assert.deepEqual(viewport.render(80), ["updated-header", "resources", "item-0"]);
+
+		viewport.clear();
+		assert.deepEqual(viewport.render(80), ["updated-header", "resources"]);
+	});
+
 	it("renders backward from the live edge and skips old items", () => {
 		const viewport = new TranscriptViewport({ height: 3, overscanRows: 2 });
 		const items = createSingleLineItems(10);

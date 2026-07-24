@@ -70,6 +70,26 @@ describe("FullscreenLayout", () => {
 		assert.equal(transcript.getViewportHeight(), 5);
 	});
 
+	it("scrolls startup content with conversation output", () => {
+		const transcript = new TranscriptViewport({ overscanRows: 0 });
+		transcript.setLeadingComponents([new LinesComponent(["header"]), new LinesComponent(["resources"])]);
+		for (let index = 0; index < 4; index++) transcript.addChild(new LinesComponent([`message-${index}`]));
+		const layout = new FullscreenLayout({
+			getHeight: () => 5,
+			top: [],
+			transcript,
+			status: [],
+			widgetsAbove: [],
+			editor: new LinesComponent(["editor"]),
+			widgetsBelow: [],
+			footer: new LinesComponent(["footer"]),
+		});
+
+		assert.deepEqual(layout.render(80), ["message-1", "message-2", "message-3", "editor", "footer"]);
+		transcript.scrollToTop();
+		assert.deepEqual(layout.render(80), ["header", "resources", "message-0", "editor", "footer"]);
+	});
+
 	it("pads short transcripts so the editor and footer stay at the bottom", () => {
 		let height = 8;
 		const transcript = new TranscriptViewport({ overscanRows: 0 });
