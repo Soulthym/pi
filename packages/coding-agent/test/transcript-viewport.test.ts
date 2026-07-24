@@ -1,6 +1,10 @@
 import assert from "node:assert";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, it } from "vitest";
+import type { CustomMessage } from "../src/core/messages.ts";
+import type { CustomEntry } from "../src/core/session-manager.ts";
+import { CustomEntryComponent } from "../src/modes/interactive/components/custom-entry.ts";
+import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
 import {
 	type TranscriptItemInvalidationHandler,
 	TranscriptViewport,
@@ -184,6 +188,49 @@ describe("TranscriptViewport virtualization", () => {
 
 		assert.deepEqual(measure(100), { initialCalls: 48, idleCalls: 0, visibleLines: 24 });
 		assert.deepEqual(measure(10_000), { initialCalls: 48, idleCalls: 0, visibleLines: 24 });
+	});
+});
+
+describe("TranscriptViewport extension compatibility", () => {
+	it("rerenders visible custom renderer components without caching offscreen ones", () => {
+		const viewport = new TranscriptViewport({ height: 2, overscanRows: 0 });
+		const messageRendererComponent = new CountingComponent(["message-before"]);
+		const message: CustomMessage = {
+			role: "custom",
+			customType: "dynamic-message",
+			content: "message",
+			display: true,
+			timestamp: 0,
+		};
+		viewport.addChild(new CustomMessageComponent(message, () => messageRendererComponent));
+
+		assert.deepEqual(viewport.render(80), ["", "message-before"]);
+		messageRendererComponent.lines = ["message-after"];
+		assert.deepEqual(viewport.render(80), ["", "message-after"]);
+		assert.equal(messageRendererComponent.renderCount, 2);
+
+		viewport.clear();
+		const entryRendererComponent = new CountingComponent(["entry-before"]);
+		const entry: CustomEntry = {
+			type: "custom",
+			id: "entry",
+			parentId: null,
+			timestamp: "2026-07-24T00:00:00.000Z",
+			customType: "dynamic-entry",
+		};
+		viewport.addChild(new CustomEntryComponent(entry, () => entryRendererComponent));
+
+		assert.deepEqual(viewport.render(80), ["", "entry-before"]);
+		entryRendererComponent.lines = ["entry-after"];
+		assert.deepEqual(viewport.render(80), ["", "entry-after"]);
+		assert.equal(entryRendererComponent.renderCount, 2);
+
+		viewport.clear();
+		const offscreenRendererComponent = new CountingComponent(["offscreen"]);
+		viewport.addChild(new CustomMessageComponent(message, () => offscreenRendererComponent));
+		addItems(viewport, createSingleLineItems(4));
+		assert.deepEqual(viewport.render(80), ["item-2", "item-3"]);
+		assert.equal(offscreenRendererComponent.renderCount, 0);
 	});
 });
 
