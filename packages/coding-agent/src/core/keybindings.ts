@@ -27,6 +27,12 @@ export interface AppKeybindings {
 	"app.message.followUp": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
+	"app.transcript.lineUp": true;
+	"app.transcript.lineDown": true;
+	"app.transcript.pageUp": true;
+	"app.transcript.pageDown": true;
+	"app.transcript.top": true;
+	"app.transcript.bottom": true;
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
@@ -111,6 +117,30 @@ export const KEYBINDINGS = {
 	"app.clipboard.pasteImage": {
 		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
 		description: "Paste image from clipboard (text fallback)",
+	},
+	"app.transcript.lineUp": {
+		defaultKeys: ["shift+up", "ctrl+up"],
+		description: "Scroll transcript up one line",
+	},
+	"app.transcript.lineDown": {
+		defaultKeys: ["shift+down", "ctrl+down"],
+		description: "Scroll transcript down one line",
+	},
+	"app.transcript.pageUp": {
+		defaultKeys: "pageUp",
+		description: "Scroll transcript up one page",
+	},
+	"app.transcript.pageDown": {
+		defaultKeys: "pageDown",
+		description: "Scroll transcript down one page",
+	},
+	"app.transcript.top": {
+		defaultKeys: "ctrl+home",
+		description: "Jump to top of transcript",
+	},
+	"app.transcript.bottom": {
+		defaultKeys: "ctrl+end",
+		description: "Follow live transcript output",
 	},
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
