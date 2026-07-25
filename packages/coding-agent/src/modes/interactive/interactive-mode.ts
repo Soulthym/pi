@@ -1814,6 +1814,7 @@ export class InteractiveMode {
 		this.showError(`${prefix}: ${message}`);
 		stopThemeWatcher();
 		this.stop();
+		await flushTerminalOutput();
 		process.exit(1);
 	}
 
@@ -3699,8 +3700,9 @@ export class InteractiveMode {
 	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
-	private uncaughtCrash(error: Error): never {
+	private async uncaughtCrash(error: Error): Promise<never> {
 		if (this.isShuttingDown) {
+			await flushTerminalOutput();
 			process.exit(1);
 		}
 		this.isShuttingDown = true;
@@ -3715,6 +3717,7 @@ export class InteractiveMode {
 		} catch {}
 		console.error("pi exiting due to uncaughtException:");
 		console.error(error);
+		await flushTerminalOutput();
 		process.exit(1);
 	}
 
@@ -3761,7 +3764,7 @@ export class InteractiveMode {
 		// Restore the terminal before the process dies on any uncaught throw.
 		// Without this, an unhandled exception from extension code (or anywhere
 		// in pi) leaves the terminal in raw mode with no cursor.
-		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
+		const uncaughtExceptionHandler = (error: Error) => void this.uncaughtCrash(error);
 		process.prependListener("uncaughtException", uncaughtExceptionHandler);
 		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
 	}

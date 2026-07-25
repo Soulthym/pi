@@ -245,3 +245,103 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		expect(context.runtimeHost.dispose).not.toHaveBeenCalled();
 	});
 });
+
+type FatalRuntimeThis = {
+	showError: (message: string) => void;
+	stop: () => void;
+};
+
+type UncaughtCrashThis = {
+	isShuttingDown: boolean;
+	unregisterSignalHandlers: () => void;
+	ui: { stop: () => void };
+};
+
+type InteractiveModePrototypeWithFatalPaths = {
+	handleFatalRuntimeError(this: FatalRuntimeThis, prefix: string, error: unknown): Promise<never>;
+	uncaughtCrash(this: UncaughtCrashThis, error: Error): Promise<never>;
+};
+
+async function callFatalRuntimeError(context: FatalRuntimeThis, prefix: string, error: unknown): Promise<void> {
+	try {
+		await (interactiveModePrototype as InteractiveModePrototypeWithFatalPaths).handleFatalRuntimeError.call(
+			context,
+			prefix,
+			error,
+		);
+	} catch (caught) {
+		if (!(caught instanceof ProcessExitError)) throw caught;
+	}
+}
+
+async function callUncaughtCrash(context: UncaughtCrashThis, error: Error): Promise<void> {
+	try {
+		await (interactiveModePrototype as InteractiveModePrototypeWithFatalPaths).uncaughtCrash.call(context, error);
+	} catch (caught) {
+		if (!(caught instanceof ProcessExitError)) throw caught;
+	}
+}
+
+describe("InteractiveMode fatal terminal restoration", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		restoreStdoutIsTTY();
+	});
+
+	test("flushes a fatal runtime error before exiting", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new ProcessExitError();
+		}) as typeof process.exit);
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((_chunk: string | Uint8Array, callback?: () => void) => {
+			completeFlush = callback;
+			return true;
+		}) as typeof process.stdout.write);
+		const context: FatalRuntimeThis = {
+			showError: vi.fn(),
+			stop: vi.fn(),
+		};
+
+		const fatalPromise = callFatalRuntimeError(context, "Failed to resume session", new Error("broken"));
+
+		expect(context.showError).toHaveBeenCalledWith("Failed to resume session: broken");
+		expect(context.stop).toHaveBeenCalledTimes(1);
+		expect(exit).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await fatalPromise;
+
+		expect(exit).toHaveBeenCalledWith(1);
+	});
+
+	test("flushes uncaught-exception restoration before exiting", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new ProcessExitError();
+		}) as typeof process.exit);
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((_chunk: string | Uint8Array, callback?: () => void) => {
+			completeFlush = callback;
+			return true;
+		}) as typeof process.stdout.write);
+		const context: UncaughtCrashThis = {
+			isShuttingDown: false,
+			unregisterSignalHandlers: vi.fn(),
+			ui: { stop: vi.fn() },
+		};
+
+		const crashPromise = callUncaughtCrash(context, new Error("crash"));
+
+		expect(context.isShuttingDown).toBe(true);
+		expect(context.unregisterSignalHandlers).toHaveBeenCalledTimes(1);
+		expect(context.ui.stop).toHaveBeenCalledTimes(1);
+		expect(exit).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await crashPromise;
+
+		expect(exit).toHaveBeenCalledWith(1);
+	});
+});
