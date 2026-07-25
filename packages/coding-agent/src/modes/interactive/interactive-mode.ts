@@ -2638,7 +2638,7 @@ export class InteractiveMode {
 		// Register app action handlers
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
+		this.defaultEditor.onAction("app.suspend", () => void this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
 		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
@@ -3773,7 +3773,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers = [];
 	}
 
-	private handleCtrlZ(): void {
+	private async handleCtrlZ(): Promise<void> {
 		if (process.platform === "win32") {
 			this.showStatus("Suspend to background is not supported on Windows");
 			return;
@@ -3800,6 +3800,7 @@ export class InteractiveMode {
 		try {
 			// Stop the TUI (restore terminal to normal mode)
 			this.ui.stop();
+			await flushTerminalOutput();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
 			process.kill(0, "SIGTSTP");
@@ -3937,6 +3938,7 @@ export class InteractiveMode {
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
 		this.ui.stop();
 		try {
+			await flushTerminalOutput();
 			const result = await editInExternalEditor({
 				command: editorCmd,
 				content,
