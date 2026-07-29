@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ExtensionEditorComponent } from "../src/modes/interactive/components/extension-editor.ts";
 import { editInExternalEditor } from "../src/modes/interactive/external-editor.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
-vi.mock("../src/modes/interactive/external-editor.ts", () => ({
-	editInExternalEditor: vi.fn(),
-}));
+vi.mock("../src/modes/interactive/external-editor.ts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/modes/interactive/external-editor.ts")>();
+	return {
+		...actual,
+		editInExternalEditor: vi.fn(),
+	};
+});
 
 type FakeUi = {
 	start: () => void;
@@ -193,7 +198,7 @@ type ExternalEditorThis = {
 		getText: () => string;
 		setText: (text: string) => void;
 	};
-	ui: FakeUi;
+	ui: FakeUi & { getScreenMode: () => "fullscreen" | "inline" };
 };
 
 type InteractiveModePrototypeWithExternalEditor = {
@@ -213,7 +218,7 @@ describe("InteractiveMode external-editor handoff", () => {
 			completeFlush = callback;
 			return true;
 		}) as typeof process.stdout.write);
-		const externalEditor = vi.mocked(editInExternalEditor).mockResolvedValue({
+		const externalEditor = vi.mocked(editInExternalEditor).mockReset().mockResolvedValue({
 			status: "complete",
 			content: "edited",
 		});
@@ -228,6 +233,7 @@ describe("InteractiveMode external-editor handoff", () => {
 				stop: vi.fn(),
 				start: vi.fn(),
 				requestRender: vi.fn(),
+				getScreenMode: () => "fullscreen",
 			},
 		};
 
@@ -241,9 +247,70 @@ describe("InteractiveMode external-editor handoff", () => {
 		completeFlush?.();
 		await editPromise;
 
-		expect(externalEditor).toHaveBeenCalledWith({ command: "nvim", content: "original" });
+		expect(externalEditor).toHaveBeenCalledWith({ command: "nvim", content: "original", announce: false });
 		expect(context.editor.setText).toHaveBeenCalledWith("edited");
 		expect(context.ui.start).toHaveBeenCalledTimes(1);
 		expect(context.ui.requestRender).toHaveBeenCalledWith(true);
+	});
+});
+
+type ExtensionEditorHandoffThis = {
+	editor: {
+		getText: () => string;
+		setText: (text: string) => void;
+	};
+	tui: FakeUi & { getScreenMode: () => "fullscreen" | "inline" };
+	externalEditorCommand: string;
+};
+
+type ExtensionEditorPrototypeWithExternalEditor = {
+	handleOpenExternalEditor(this: ExtensionEditorHandoffThis): Promise<void>;
+};
+
+describe("ExtensionEditorComponent external-editor handoff", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		restoreStdoutIsTTY();
+	});
+
+	test("flushes restoration and suppresses the notice in fullscreen", async () => {
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((_chunk: string | Uint8Array, callback?: () => void) => {
+			completeFlush = callback;
+			return true;
+		}) as typeof process.stdout.write);
+		const externalEditor = vi.mocked(editInExternalEditor).mockReset().mockResolvedValue({
+			status: "complete",
+			content: "edited",
+		});
+		const context: ExtensionEditorHandoffThis = {
+			editor: {
+				getText: () => "original",
+				setText: vi.fn(),
+			},
+			tui: {
+				stop: vi.fn(),
+				start: vi.fn(),
+				requestRender: vi.fn(),
+				getScreenMode: () => "fullscreen",
+			},
+			externalEditorCommand: "nvim",
+		};
+
+		const editPromise = (
+			ExtensionEditorComponent.prototype as unknown as ExtensionEditorPrototypeWithExternalEditor
+		).handleOpenExternalEditor.call(context);
+
+		expect(context.tui.stop).toHaveBeenCalledTimes(1);
+		expect(externalEditor).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await editPromise;
+
+		expect(externalEditor).toHaveBeenCalledWith({ command: "nvim", content: "original", announce: false });
+		expect(context.editor.setText).toHaveBeenCalledWith("edited");
+		expect(context.tui.start).toHaveBeenCalledTimes(1);
+		expect(context.tui.requestRender).toHaveBeenCalledWith(true);
 	});
 });

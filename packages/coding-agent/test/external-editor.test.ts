@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ExternalEditorResult, editInExternalEditor } from "../src/modes/interactive/external-editor.ts";
 
 const editorFixturePath = fileURLToPath(new URL("./fixtures/fake-external-editor.mjs", import.meta.url));
@@ -14,7 +14,10 @@ interface EditorCapture {
 	directoryMode: number;
 }
 
-async function runExternalEditor(fixtureFlag?: "--fail" | "--empty"): Promise<{
+async function runExternalEditor(
+	fixtureFlag?: "--fail" | "--empty",
+	announce?: boolean,
+): Promise<{
 	result: ExternalEditorResult;
 	capture: EditorCapture;
 }> {
@@ -24,6 +27,7 @@ async function runExternalEditor(fixtureFlag?: "--fail" | "--empty"): Promise<{
 		const result = await editInExternalEditor({
 			command: `${process.execPath} ${editorFixturePath} ${capturePath}${fixtureFlag ? ` ${fixtureFlag}` : ""}`,
 			content: "original",
+			announce,
 		});
 		const capture = JSON.parse(readFileSync(capturePath, "utf-8")) as EditorCapture;
 		return { result, capture };
@@ -33,7 +37,12 @@ async function runExternalEditor(fixtureFlag?: "--fail" | "--empty"): Promise<{
 }
 
 describe("editInExternalEditor", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("edits a prompt inside a private temporary directory", async () => {
+		const stdoutWrite = vi.spyOn(process.stdout, "write");
 		const { result, capture } = await runExternalEditor();
 		const directory = dirname(capture.filePath);
 
@@ -43,10 +52,18 @@ describe("editInExternalEditor", () => {
 		expect(basename(capture.filePath)).toBe("prompt.md");
 		expect(capture.entries).toEqual(["prompt.md"]);
 		expect(capture.content).toBe("original");
+		expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("Launching external editor:"));
 		if (process.platform !== "win32") {
 			expect(capture.directoryMode & 0o077).toBe(0);
 		}
 		expect(existsSync(directory)).toBe(false);
+	});
+
+	it("suppresses the launch notice when requested", async () => {
+		const stdoutWrite = vi.spyOn(process.stdout, "write");
+		await runExternalEditor(undefined, false);
+
+		expect(stdoutWrite).not.toHaveBeenCalledWith(expect.stringContaining("Launching external editor:"));
 	});
 
 	it("keeps the original content when the editor exits unsuccessfully", async () => {
