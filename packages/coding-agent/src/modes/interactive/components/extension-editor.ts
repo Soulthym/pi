@@ -14,7 +14,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import type { KeybindingsManager } from "../../../core/keybindings.ts";
-import { editInExternalEditor } from "../external-editor.ts";
+import { editInExternalEditor, flushTerminalOutput } from "../external-editor.ts";
 import { getEditorTheme, theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
@@ -117,9 +117,11 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		const content = this.editor.getText();
 		this.tui.stop();
 		try {
+			await flushTerminalOutput();
 			const result = await editInExternalEditor({
 				command: this.externalEditorCommand,
 				content,
+				announce: this.tui.getScreenMode() !== "fullscreen",
 			});
 			if (result.status === "complete") {
 				this.editor.setText(result.content);

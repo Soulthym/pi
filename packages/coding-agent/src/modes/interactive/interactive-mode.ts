@@ -140,7 +140,7 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
-import { editInExternalEditor } from "./external-editor.ts";
+import { editInExternalEditor, flushTerminalOutput } from "./external-editor.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { resolveInteractiveScreenMode } from "./screen-mode.ts";
 import {
@@ -214,37 +214,12 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
-const TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS = 1000;
-
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
 		return false;
 	}
 	const code = (error as NodeJS.ErrnoException).code;
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
-}
-
-async function flushTerminalOutput(): Promise<void> {
-	if (!process.stdout.isTTY) return;
-
-	await new Promise<void>((resolve) => {
-		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			resolve();
-		};
-		const timeout = setTimeout(finish, TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS);
-
-		try {
-			// A non-empty final write is a stream-ordering barrier; process.exit()
-			// may otherwise truncate terminal restoration sequences on slow ttys.
-			process.stdout.write("\x1b[0m", finish);
-		} catch {
-			finish();
-		}
-	});
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
@@ -3945,6 +3920,7 @@ export class InteractiveMode {
 			const result = await editInExternalEditor({
 				command: editorCmd,
 				content,
+				announce: this.ui.getScreenMode() !== "fullscreen",
 			});
 			if (result.status === "complete") {
 				this.editor.setText(result.content);
