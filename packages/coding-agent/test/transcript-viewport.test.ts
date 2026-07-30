@@ -235,6 +235,41 @@ describe("TranscriptViewport extension compatibility", () => {
 });
 
 describe("TranscriptViewport anchors", () => {
+	it("follows a growing streamed item while at the live edge", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		const items = createSingleLineItems(4);
+		const streaming = new NotifyingComponent(["stream-0"]);
+		addItems(viewport, [...items, streaming]);
+
+		assert.deepEqual(viewport.render(80), ["item-2", "item-3", "stream-0"]);
+		streaming.setLines(["stream-0", "stream-1", "stream-2", "stream-3"]);
+
+		assert.deepEqual(viewport.render(80), ["stream-1", "stream-2", "stream-3"]);
+		assert.equal(viewport.isFollowingTail(), true);
+		assert.equal(viewport.hasPendingOutput(), false);
+	});
+
+	it("keeps its anchor when an offscreen streamed item grows", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		const items = createSingleLineItems(8);
+		const streaming = new NotifyingComponent(["stream-0"]);
+		addItems(viewport, [...items, streaming]);
+		assert.deepEqual(viewport.render(80), ["item-6", "item-7", "stream-0"]);
+
+		viewport.scrollByLines(-3);
+		assert.deepEqual(viewport.render(80), ["item-3", "item-4", "item-5"]);
+		streaming.setLines(["stream-0", "stream-1", "stream-2", "stream-3"]);
+
+		assert.deepEqual(viewport.render(80), ["item-3", "item-4", "item-5"]);
+		assert.equal(streaming.renderCount, 1);
+		assert.equal(viewport.isFollowingTail(), false);
+		assert.equal(viewport.hasPendingOutput(), true);
+
+		viewport.scrollToBottom();
+		assert.deepEqual(viewport.render(80), ["stream-1", "stream-2", "stream-3"]);
+		assert.equal(viewport.hasPendingOutput(), false);
+	});
+
 	it("keeps an item-and-line anchor stable when new output arrives", () => {
 		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
 		const items = createSingleLineItems(10);
@@ -318,6 +353,24 @@ describe("TranscriptViewport anchors", () => {
 		viewport.withPreservedPendingOutput(() => viewport.invalidateItem(items[6]));
 		assert.equal(viewport.hasPendingOutput(), true);
 	});
+
+	it("resets scroll and pending-output state when conversation items are rebuilt", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		addItems(viewport, createSingleLineItems(8));
+		viewport.render(80);
+		viewport.scrollByLines(-2);
+		viewport.addChild(new CountingComponent(["pending"]));
+		assert.equal(viewport.isFollowingTail(), false);
+		assert.equal(viewport.hasPendingOutput(), true);
+
+		viewport.clear();
+		const replacement = Array.from({ length: 4 }, (_, index) => new CountingComponent([`replacement-${index}`]));
+		addItems(viewport, replacement);
+
+		assert.deepEqual(viewport.render(80), ["replacement-1", "replacement-2", "replacement-3"]);
+		assert.equal(viewport.isFollowingTail(), true);
+		assert.equal(viewport.hasPendingOutput(), false);
+	});
 });
 
 describe("TranscriptViewport cache retention", () => {
@@ -341,7 +394,7 @@ describe("TranscriptViewport cache retention", () => {
 		);
 	});
 
-	it("uses a global epoch only for explicit full invalidation", () => {
+	it("uses a global epoch only for explicit full invalidation such as theme changes", () => {
 		const viewport = new TranscriptViewport({ height: 2, overscanRows: 0 });
 		const items = createSingleLineItems(6);
 		addItems(viewport, items);
