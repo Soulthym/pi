@@ -1,6 +1,12 @@
 import { type Component, Container } from "@earendil-works/pi-tui";
 import { ComponentRenderCache } from "./render-cache.ts";
 
+export type TranscriptItemInvalidationHandler = (() => void) | undefined;
+
+export interface TranscriptItemInvalidationSource {
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void;
+}
+
 export type TranscriptViewportOptions = {
 	height?: number;
 	overscanRows?: number;
@@ -37,7 +43,7 @@ export class TranscriptViewport extends Container {
 	private readonly cache = new ComponentRenderCache();
 	private readonly itemStates = new Map<Component, ItemState>();
 	private readonly itemIndices = new Map<Component, number>();
-	private viewportHeight: number;
+	private viewportHeight: number | undefined;
 	private overscanRows: number | undefined;
 	private maxCachedLines: number | undefined;
 	private totalCachedLines = 0;
@@ -48,7 +54,7 @@ export class TranscriptViewport extends Container {
 
 	constructor(options: TranscriptViewportOptions = {}) {
 		super();
-		this.viewportHeight = this.normalizeRowCount(options.height ?? 0);
+		this.viewportHeight = options.height === undefined ? undefined : this.normalizeRowCount(options.height);
 		this.overscanRows = options.overscanRows === undefined ? undefined : this.normalizeRowCount(options.overscanRows);
 		this.maxCachedLines =
 			options.maxCachedLines === undefined ? undefined : this.normalizeRowCount(options.maxCachedLines);
@@ -58,6 +64,7 @@ export class TranscriptViewport extends Container {
 		super.addChild(component);
 		this.itemIndices.set(component, this.children.length - 1);
 		this.ensureItemState(component);
+		this.attachInvalidationHandler(component);
 	}
 
 	insertChildBefore(component: Component, before: Component): void {
@@ -68,6 +75,7 @@ export class TranscriptViewport extends Container {
 		}
 		this.children.splice(index, 0, component);
 		this.ensureItemState(component);
+		this.attachInvalidationHandler(component);
 		this.reindexFrom(index);
 	}
 
@@ -82,12 +90,14 @@ export class TranscriptViewport extends Container {
 		if (this.lastFrameTop?.component === component) {
 			this.lastFrameTop = undefined;
 		}
+		this.detachInvalidationHandler(component);
 		this.children.splice(index, 1);
 		this.dropItem(component);
 		this.reindexFrom(index);
 	}
 
 	override clear(): void {
+		for (const component of this.children) this.detachInvalidationHandler(component);
 		this.children = [];
 		this.cache.invalidateAll();
 		this.itemStates.clear();
@@ -123,7 +133,7 @@ export class TranscriptViewport extends Container {
 		this.viewportHeight = this.normalizeRowCount(height);
 	}
 
-	getViewportHeight(): number {
+	getViewportHeight(): number | undefined {
 		return this.viewportHeight;
 	}
 
@@ -166,6 +176,7 @@ export class TranscriptViewport extends Container {
 
 	override render(width: number): string[] {
 		this.lastWidth = width;
+		if (this.viewportHeight === undefined) return super.render(width);
 		if (this.viewportHeight === 0 || this.children.length === 0) {
 			this.lastFrameTop = undefined;
 			this.evictInactiveItems(new Set());
@@ -179,7 +190,8 @@ export class TranscriptViewport extends Container {
 	}
 
 	private renderFromTail(width: number, activeItems: Set<Component>): string[] {
-		const targetRows = this.viewportHeight + this.getOverscanRows();
+		const viewportHeight = this.viewportHeight ?? 0;
+		const targetRows = viewportHeight + this.getOverscanRows();
 		const rendered: RenderedItem[] = [];
 		let renderedRows = 0;
 
@@ -192,12 +204,13 @@ export class TranscriptViewport extends Container {
 		}
 
 		const allLines = this.flattenRenderedItems(rendered);
-		const visibleLines = allLines.slice(-this.viewportHeight);
+		const visibleLines = allLines.slice(-viewportHeight);
 		this.lastFrameTop = this.findTopAnchor(rendered, allLines.length - visibleLines.length);
 		return visibleLines;
 	}
 
 	private renderFromAnchor(width: number, activeItems: Set<Component>): string[] {
+		const viewportHeight = this.viewportHeight ?? 0;
 		const anchor = this.anchor;
 		if (!anchor) return this.renderFromTail(width, activeItems);
 		const anchorIndex = this.resolveItemIndex(anchor.component);
@@ -206,7 +219,7 @@ export class TranscriptViewport extends Container {
 			return this.renderFromTail(width, activeItems);
 		}
 
-		const targetRows = this.viewportHeight + this.getOverscanRows();
+		const targetRows = viewportHeight + this.getOverscanRows();
 		const rendered: RenderedItem[] = [];
 		let renderedRows = 0;
 		let lastRenderedIndex = anchorIndex - 1;
@@ -222,9 +235,9 @@ export class TranscriptViewport extends Container {
 		}
 
 		const allLines = this.flattenRenderedItems(rendered);
-		const visibleLines = allLines.slice(0, this.viewportHeight);
+		const visibleLines = allLines.slice(0, viewportHeight);
 		this.lastFrameTop = this.findTopAnchor(rendered, 0);
-		if (lastRenderedIndex === this.children.length - 1 && allLines.length <= this.viewportHeight) {
+		if (lastRenderedIndex === this.children.length - 1 && allLines.length <= viewportHeight) {
 			this.anchor = undefined;
 			return this.renderFromTail(width, activeItems);
 		}
@@ -316,6 +329,18 @@ export class TranscriptViewport extends Container {
 		return { component: this.children[index], lineOffset: offset };
 	}
 
+	private attachInvalidationHandler(component: Component): void {
+		const source = component as Component & Partial<TranscriptItemInvalidationSource>;
+		if (typeof source.setTranscriptInvalidationHandler !== "function") return;
+		source.setTranscriptInvalidationHandler(() => this.invalidateItem(component));
+	}
+
+	private detachInvalidationHandler(component: Component): void {
+		const source = component as Component & Partial<TranscriptItemInvalidationSource>;
+		if (typeof source.setTranscriptInvalidationHandler !== "function") return;
+		source.setTranscriptInvalidationHandler(undefined);
+	}
+
 	private ensureItemState(component: Component): ItemState {
 		let state = this.itemStates.get(component);
 		if (!state) {
@@ -342,7 +367,7 @@ export class TranscriptViewport extends Container {
 	}
 
 	private evictInactiveItems(activeItems: Set<Component>): void {
-		const budget = this.maxCachedLines ?? Math.max(1, this.viewportHeight * 4);
+		const budget = this.maxCachedLines ?? Math.max(1, (this.viewportHeight ?? 0) * 4);
 		if (this.totalCachedLines <= budget) return;
 
 		const candidates = [...this.itemStates.entries()]
@@ -371,7 +396,7 @@ export class TranscriptViewport extends Container {
 	}
 
 	private getOverscanRows(): number {
-		return this.overscanRows ?? this.viewportHeight;
+		return this.overscanRows ?? this.viewportHeight ?? 0;
 	}
 
 	private normalizeRowCount(value: number): number {

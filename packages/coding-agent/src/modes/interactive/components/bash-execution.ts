@@ -13,21 +13,36 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
+import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;
+
+class TranscriptLoader extends Loader {
+	private transcriptInvalidationHandler: TranscriptItemInvalidationHandler;
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.transcriptInvalidationHandler = handler;
+	}
+
+	override setText(text: string): void {
+		super.setText(text);
+		this.transcriptInvalidationHandler?.();
+	}
+}
 
 export class BashExecutionComponent extends Container {
 	private command: string;
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
-	private loader: Loader;
+	private loader: TranscriptLoader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
+	private transcriptInvalidationHandler: TranscriptItemInvalidationHandler;
 
 	constructor(command: string, ui: TUI, excludeFromContext = false) {
 		super();
@@ -52,16 +67,21 @@ export class BashExecutionComponent extends Container {
 		this.contentContainer.addChild(header);
 
 		// Loader
-		this.loader = new Loader(
+		this.loader = new TranscriptLoader(
 			ui,
 			(spinner) => theme.fg(colorKey, spinner),
 			(text) => theme.fg("muted", text),
 			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
 		);
+		this.loader.setTranscriptInvalidationHandler(() => this.transcriptInvalidationHandler?.());
 		this.contentContainer.addChild(this.loader);
 
 		// Bottom border
 		this.addChild(new DynamicBorder(borderColor));
+	}
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.transcriptInvalidationHandler = handler;
 	}
 
 	/**
@@ -202,6 +222,7 @@ export class BashExecutionComponent extends Container {
 				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
 			}
 		}
+		this.transcriptInvalidationHandler?.();
 	}
 
 	/**

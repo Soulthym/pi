@@ -1,7 +1,10 @@
 import assert from "node:assert";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, it } from "vitest";
-import { TranscriptViewport } from "../src/modes/interactive/components/transcript-viewport.ts";
+import {
+	type TranscriptItemInvalidationHandler,
+	TranscriptViewport,
+} from "../src/modes/interactive/components/transcript-viewport.ts";
 
 class CountingComponent implements Component {
 	lines: string[];
@@ -24,6 +27,19 @@ class CountingComponent implements Component {
 	}
 }
 
+class NotifyingComponent extends CountingComponent {
+	private invalidationHandler: TranscriptItemInvalidationHandler;
+
+	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void {
+		this.invalidationHandler = handler;
+	}
+
+	setLines(lines: string[]): void {
+		this.lines = lines;
+		this.invalidationHandler?.();
+	}
+}
+
 function createSingleLineItems(count: number): CountingComponent[] {
 	return Array.from({ length: count }, (_, index) => new CountingComponent([`item-${index}`]));
 }
@@ -33,6 +49,15 @@ function addItems(viewport: TranscriptViewport, items: CountingComponent[]): voi
 }
 
 describe("TranscriptViewport virtualization", () => {
+	it("preserves ordinary Container rendering until a viewport height is assigned", () => {
+		const viewport = new TranscriptViewport();
+		const items = createSingleLineItems(4);
+		addItems(viewport, items);
+
+		assert.deepEqual(viewport.render(80), ["item-0", "item-1", "item-2", "item-3"]);
+		assert.equal(viewport.getViewportHeight(), undefined);
+	});
+
 	it("renders backward from the live edge and skips old items", () => {
 		const viewport = new TranscriptViewport({ height: 3, overscanRows: 2 });
 		const items = createSingleLineItems(10);
@@ -71,6 +96,21 @@ describe("TranscriptViewport virtualization", () => {
 		viewport.scrollToTop();
 		assert.deepEqual(viewport.render(80), ["changed-head", "item-1", "item-2"]);
 		assert.equal(items[0].renderCount, 1);
+	});
+
+	it("automatically versions Pi-owned invalidation sources", () => {
+		const viewport = new TranscriptViewport({ height: 1, overscanRows: 0 });
+		const component = new NotifyingComponent(["before"]);
+		viewport.addChild(component);
+		assert.deepEqual(viewport.render(80), ["before"]);
+
+		component.setLines(["after"]);
+		assert.deepEqual(viewport.render(80), ["after"]);
+		assert.equal(component.renderCount, 2);
+
+		viewport.removeChild(component);
+		component.setLines(["detached"]);
+		assert.deepEqual(viewport.render(80), []);
 	});
 
 	it("reuses cached items on height changes and rewraps only visible items on width changes", () => {
