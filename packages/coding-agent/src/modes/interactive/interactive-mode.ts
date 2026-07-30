@@ -708,10 +708,13 @@ export class InteractiveMode {
 
 		this.renderWidgets(); // Initialize with default spacer
 		if (this.ui.getScreenMode() === "fullscreen") {
+			// Match inline scrollback: startup content leads the transcript instead of
+			// reserving fixed rows that can cover or displace conversation output.
+			this.chatContainer.setLeadingComponents([this.headerContainer, this.loadedResourcesContainer]);
 			this.ui.addChild(
 				new FullscreenLayout({
 					getHeight: () => this.ui.terminal.rows,
-					top: [this.headerContainer, this.loadedResourcesContainer],
+					top: [],
 					transcript: this.chatContainer,
 					status: [this.pendingMessagesContainer, this.statusContainer],
 					widgetsAbove: [this.widgetContainerAbove],
