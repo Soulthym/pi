@@ -1,4 +1,5 @@
-import { type Component, ComponentRenderCache, Container } from "@earendil-works/pi-tui";
+import { type Component, Container } from "@earendil-works/pi-tui";
+import { ComponentRenderCache } from "./render-cache.ts";
 
 export type TranscriptViewportOptions = {
 	height?: number;
