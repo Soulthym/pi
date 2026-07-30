@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { ComponentRenderCache } from "./render-cache.ts";
 import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -18,11 +19,30 @@ type RenderBlockState = {
 	component: Component;
 };
 
+class RenderChunkContainer extends Container {
+	private readonly renderCache = new ComponentRenderCache();
+
+	override invalidate(): void {
+		super.invalidate();
+		this.renderCache.invalidateAll();
+	}
+
+	override render(width: number): string[] {
+		const lines: string[] = [];
+		for (const child of this.children) {
+			// Reconciliation replaces changed blocks, so a retained child identity
+			// is immutable until explicit global invalidation clears this cache.
+			for (const line of this.renderCache.render(child, width, 0).lines) lines.push(line);
+		}
+		return lines;
+	}
+}
+
 /**
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
-	private contentContainer: Container;
+	private contentContainer: RenderChunkContainer;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
 	private hiddenThinkingLabel: string;
@@ -47,7 +67,7 @@ export class AssistantMessageComponent extends Container {
 		this.outputPad = outputPad;
 
 		// Container for text/thinking content
-		this.contentContainer = new Container();
+		this.contentContainer = new RenderChunkContainer();
 		this.addChild(this.contentContainer);
 
 		if (message) {

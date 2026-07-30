@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Container } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { TranscriptViewport } from "../src/modes/interactive/components/transcript-viewport.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -126,34 +127,60 @@ describe("AssistantMessageComponent", () => {
 				{ type: "text", text: "partial" },
 			]),
 		);
+		const viewport = new TranscriptViewport({ height: 20, overscanRows: 0 });
+		viewport.addChild(component);
+		viewport.render(80);
+
 		const contentContainer = component.children[0] as Container;
 		const initialThinking = contentContainer.children[1];
 		const initialThinkingSpacer = contentContainer.children[2];
 		const initialText = contentContainer.children[3];
+		const originalThinkingRender = initialThinking.render.bind(initialThinking);
+		let completedThinkingRenderCount = 0;
+		initialThinking.render = (width: number) => {
+			completedThinkingRenderCount += 1;
+			return originalThinkingRender(width);
+		};
 
+		const expandedResponse = "partial response ".repeat(20).trim();
 		component.updateContent(
 			createAssistantMessage([
 				{ type: "thinking", thinking: "completed reasoning" },
-				{ type: "text", text: "partial response" },
+				{ type: "text", text: expandedResponse },
 			]),
 		);
 
 		expect(contentContainer.children[1]).toBe(initialThinking);
 		expect(contentContainer.children[2]).toBe(initialThinkingSpacer);
 		expect(contentContainer.children[3]).not.toBe(initialText);
+		expect(stripAnsi(viewport.render(80).join("\n"))).toContain("partial response");
+		expect(completedThinkingRenderCount).toBe(0);
 		const updatedText = contentContainer.children[3];
 
 		component.updateContent(
 			createAssistantMessage([
 				{ type: "thinking", thinking: "completed reasoning" },
-				{ type: "text", text: "partial response" },
+				{ type: "text", text: expandedResponse },
 			]),
 		);
 
 		expect(contentContainer.children[1]).toBe(initialThinking);
 		expect(contentContainer.children[2]).toBe(initialThinkingSpacer);
 		expect(contentContainer.children[3]).toBe(updatedText);
-		expect(stripAnsi(component.render(80).join("\n"))).toContain("partial response");
+		expect(stripAnsi(viewport.render(80).join("\n"))).toContain("partial response");
+		expect(completedThinkingRenderCount).toBe(0);
+
+		viewport.setViewportHeight(24);
+		viewport.render(80);
+		expect(completedThinkingRenderCount).toBe(0);
+
+		viewport.render(79);
+		expect(completedThinkingRenderCount).toBe(1);
+
+		contentContainer.invalidate();
+		viewport.invalidateItem(component);
+		viewport.render(79);
+		expect(completedThinkingRenderCount).toBe(2);
 	});
 
 	test("uses configured output padding for user messages", () => {
