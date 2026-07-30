@@ -136,9 +136,13 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new ProcessExitError();
 		}) as typeof process.exit);
-		const stdoutWrite = vi
-			.spyOn(process.stdout, "write")
-			.mockImplementation((() => true) as typeof process.stdout.write);
+		const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
+			_chunk: string | Uint8Array,
+			callback?: () => void,
+		) => {
+			callback?.();
+			return true;
+		}) as typeof process.stdout.write);
 		setStdoutIsTTY(true);
 		const order: string[] = [];
 		const context = createContext(order, createSessionManager({ sessionFile: createTempFile() }));
@@ -155,9 +159,13 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new ProcessExitError();
 		}) as typeof process.exit);
-		const stdoutWrite = vi
-			.spyOn(process.stdout, "write")
-			.mockImplementation((() => true) as typeof process.stdout.write);
+		const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((
+			_chunk: string | Uint8Array,
+			callback?: () => void,
+		) => {
+			callback?.();
+			return true;
+		}) as typeof process.stdout.write);
 		setStdoutIsTTY(true);
 		const order: string[] = [];
 		const context = createContext(order, createSessionManager({ sessionFile: createTempFile() }));
@@ -167,6 +175,60 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		for (const call of stdoutWrite.mock.calls) {
 			expect(call[0]).not.toContain("To resume this session:");
 		}
+	});
+
+	test("signal-triggered shutdown flushes terminal restoration before exiting", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new ProcessExitError();
+		}) as typeof process.exit);
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array, callback?: () => void) => {
+			if (String(chunk) === "\x1b[0m") {
+				completeFlush = callback;
+			}
+			return true;
+		}) as typeof process.stdout.write);
+		const order: string[] = [];
+		const context = createContext(order);
+
+		const shutdownPromise = callShutdown(context, { fromSignal: true });
+		await vi.waitFor(() => expect(completeFlush).toBeTypeOf("function"));
+
+		expect(order).toEqual(["dispose", "drainInput", "stop"]);
+		expect(exit).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await shutdownPromise;
+
+		expect(exit).toHaveBeenCalledWith(0);
+	});
+
+	test("interactive shutdown flushes terminal restoration before exiting", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new ProcessExitError();
+		}) as typeof process.exit);
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array, callback?: () => void) => {
+			if (String(chunk) === "\x1b[0m") {
+				completeFlush = callback;
+			}
+			return true;
+		}) as typeof process.stdout.write);
+		const order: string[] = [];
+		const context = createContext(order);
+
+		const shutdownPromise = callShutdown(context);
+		await vi.waitFor(() => expect(completeFlush).toBeTypeOf("function"));
+
+		expect(order).toEqual(["drainInput", "stop", "dispose"]);
+		expect(exit).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await shutdownPromise;
+
+		expect(exit).toHaveBeenCalledWith(0);
 	});
 
 	test("re-entrant shutdown is a no-op", async () => {
