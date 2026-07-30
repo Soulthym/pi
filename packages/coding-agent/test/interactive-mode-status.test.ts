@@ -127,7 +127,10 @@ describe("InteractiveMode.setToolsExpanded", () => {
 			customHeader: undefined,
 			builtInHeader: header,
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
-			chatContainer: { children: [chatChild] },
+			chatContainer: {
+				children: [chatChild],
+				withPreservedPendingOutput: vi.fn((update: () => void) => update()),
+			},
 			ui: { requestRender: vi.fn() },
 		};
 
@@ -137,7 +140,41 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(header.setExpanded).toHaveBeenCalledWith(true);
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
+		expect(fakeThis.chatContainer.withPreservedPendingOutput).toHaveBeenCalledTimes(1);
 		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("InteractiveMode.setupTranscriptInput", () => {
+	test("ignores Kitty key releases before matching transcript actions", () => {
+		let inputListener: ((data: string) => unknown) | undefined;
+		const editor = {};
+		const fakeThis: any = {
+			transcriptInputUnsubscribe: undefined,
+			ui: {
+				getScreenMode: vi.fn(() => "fullscreen"),
+				addInputListener: vi.fn((listener: (data: string) => unknown) => {
+					inputListener = listener;
+					return vi.fn();
+				}),
+				hasOverlay: vi.fn(() => false),
+				requestRender: vi.fn(),
+			},
+			editor,
+			editorContainer: { children: [editor] },
+			chatContainer: {
+				handleMouseInput: vi.fn(() => false),
+				scrollByLines: vi.fn(),
+			},
+			keybindings: { matches: vi.fn(() => true) },
+		};
+
+		(InteractiveMode as any).prototype.setupTranscriptInput.call(fakeThis);
+		inputListener?.("\x1b[1;5:3A");
+
+		expect(fakeThis.keybindings.matches).not.toHaveBeenCalled();
+		expect(fakeThis.chatContainer.scrollByLines).not.toHaveBeenCalled();
+		expect(fakeThis.ui.requestRender).not.toHaveBeenCalled();
 	});
 });
 

@@ -256,6 +256,21 @@ describe("TranscriptViewport anchors", () => {
 		assert.deepEqual(viewport.render(80), ["item-5", "item-6", "item-7"]);
 		assert.equal(viewport.isFollowingTail(), true);
 	});
+	it("preserves pending-output state across presentation-only updates", () => {
+		const viewport = new TranscriptViewport({ height: 3, overscanRows: 0 });
+		const items = createSingleLineItems(8);
+		addItems(viewport, items);
+		viewport.render(80);
+		viewport.scrollByLines(-2);
+
+		viewport.withPreservedPendingOutput(() => viewport.invalidateItem(items[5]));
+		assert.equal(viewport.hasPendingOutput(), false);
+
+		viewport.addChild(new CountingComponent(["new-output"]));
+		assert.equal(viewport.hasPendingOutput(), true);
+		viewport.withPreservedPendingOutput(() => viewport.invalidateItem(items[6]));
+		assert.equal(viewport.hasPendingOutput(), true);
+	});
 });
 
 describe("TranscriptViewport cache retention", () => {

@@ -176,6 +176,16 @@ export class TranscriptViewport extends Container {
 		return this.pendingOutput;
 	}
 
+	/** Run a presentation-only update without reporting it as unseen transcript output. */
+	withPreservedPendingOutput<T>(update: () => T): T {
+		const pendingOutput = this.pendingOutput;
+		try {
+			return update();
+		} finally {
+			this.pendingOutput = pendingOutput;
+		}
+	}
+
 	scrollToTop(): void {
 		const first = this.getItemAt(0);
 		this.anchor = first ? { component: first, lineOffset: 0 } : undefined;
