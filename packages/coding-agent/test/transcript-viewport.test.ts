@@ -364,6 +364,8 @@ describe("TranscriptViewport anchors", () => {
 		assert.equal(viewport.hasPendingOutput(), true);
 
 		viewport.clear();
+		assert.equal(viewport.isFollowingTail(), true);
+		assert.equal(viewport.hasPendingOutput(), false);
 		const replacement = Array.from({ length: 4 }, (_, index) => new CountingComponent([`replacement-${index}`]));
 		addItems(viewport, replacement);
 
