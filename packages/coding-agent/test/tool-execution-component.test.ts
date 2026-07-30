@@ -24,9 +24,9 @@ function createBaseToolDefinition(name = "custom_tool"): ToolDefinition {
 	};
 }
 
-function createFakeTui(): TUI {
+function createFakeTui(onRequestRender: () => void = () => {}): TUI {
 	return {
-		requestRender: () => {},
+		requestRender: onRequestRender,
 	} as unknown as TUI;
 }
 
@@ -320,6 +320,84 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
 		expect(rendered).toContain("custom result shared-token");
+	});
+
+	test("preserves renderer components and context across streaming updates", () => {
+		const callContexts: Array<{
+			lastComponent: unknown;
+			executionStarted: boolean;
+			argsComplete: boolean;
+			isPartial: boolean;
+		}> = [];
+		const resultContexts: Array<{ lastComponent: unknown; isPartial: boolean }> = [];
+		const callComponents: Text[] = [];
+		const resultComponents: Text[] = [];
+		let invalidateRenderer: (() => void) | undefined;
+		let renderRequests = 0;
+
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: (args, _theme, context) => {
+				callContexts.push({
+					lastComponent: context.lastComponent,
+					executionStarted: context.executionStarted,
+					argsComplete: context.argsComplete,
+					isPartial: context.isPartial,
+				});
+				invalidateRenderer ??= context.invalidate;
+				const component = new Text(`call:${String((args as { value?: string }).value ?? "")}`, 0, 0);
+				callComponents.push(component);
+				return component;
+			},
+			renderResult: (_result, _options, _theme, context) => {
+				resultContexts.push({ lastComponent: context.lastComponent, isPartial: context.isPartial });
+				const component = new Text(context.isPartial ? "partial result" : "final result", 0, 0);
+				resultComponents.push(component);
+				return component;
+			},
+		};
+
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-streaming-context",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(() => renderRequests++),
+			process.cwd(),
+		);
+		component.updateArgs({ value: "ready" });
+		component.markExecutionStarted();
+		component.setArgsComplete();
+		component.updateResult({ content: [{ type: "text", text: "part" }], details: {}, isError: false }, true);
+		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+
+		expect(callContexts[0]).toMatchObject({
+			lastComponent: undefined,
+			executionStarted: false,
+			argsComplete: false,
+			isPartial: true,
+		});
+		for (let i = 1; i < callContexts.length; i++) {
+			expect(callContexts[i]?.lastComponent).toBe(callComponents[i - 1]);
+		}
+		expect(callContexts.at(-1)).toMatchObject({
+			executionStarted: true,
+			argsComplete: true,
+			isPartial: false,
+		});
+		expect(resultContexts).toHaveLength(2);
+		expect(resultContexts[0]).toEqual({ lastComponent: undefined, isPartial: true });
+		expect(resultContexts[1]).toEqual({ lastComponent: resultComponents[0], isPartial: false });
+
+		let transcriptInvalidations = 0;
+		component.setTranscriptInvalidationHandler(() => transcriptInvalidations++);
+		const callCountBeforeInvalidation = callContexts.length;
+		invalidateRenderer?.();
+
+		expect(callContexts).toHaveLength(callCountBeforeInvalidation + 1);
+		expect(transcriptInvalidations).toBe(1);
+		expect(renderRequests).toBe(3);
 	});
 
 	test("exposes args in render result context", () => {
