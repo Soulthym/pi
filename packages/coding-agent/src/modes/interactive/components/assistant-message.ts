@@ -1,14 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import {
-	type Component,
-	ComponentRenderCache,
-	Container,
-	Markdown,
-	type MarkdownTheme,
-	Spacer,
-	Text,
-} from "@earendil-works/pi-tui";
+import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { ComponentRenderCache } from "./render-cache.ts";
 import type { TranscriptItemInvalidationHandler } from "./transcript-viewport.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
