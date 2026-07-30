@@ -115,6 +115,22 @@ describe("FullscreenLayout", () => {
 		assert.deepEqual(layout.render(80), ["editor-3", "footer-2"]);
 	});
 
+	it("keeps a one-row tiny frame bounded to the footer", () => {
+		const transcript = new TranscriptViewport();
+		const layout = new FullscreenLayout({
+			getHeight: () => 1,
+			top: [],
+			transcript,
+			status: [],
+			widgetsAbove: [],
+			editor: new LinesComponent(["editor-1", "editor-2"]),
+			widgetsBelow: [],
+			footer: new LinesComponent(["footer"]),
+		});
+
+		assert.deepEqual(layout.render(80), ["footer"]);
+	});
+
 	it("propagates global invalidation once to each region", () => {
 		const { layout, regions } = createLayout(() => 12);
 		layout.invalidate();

@@ -122,6 +122,7 @@ export class FullscreenLayout implements Component {
 	private renderTinyFrame(editorLines: string[], footerLines: string[], height: number): string[] {
 		const footerHeight = Math.min(footerLines.length, 1, height);
 		const editorHeight = Math.max(0, height - footerHeight);
-		return [...editorLines.slice(-editorHeight), ...footerLines.slice(-footerHeight)];
+		const visibleEditorLines = editorHeight === 0 ? [] : editorLines.slice(-editorHeight);
+		return [...visibleEditorLines, ...footerLines.slice(-footerHeight)];
 	}
 }
