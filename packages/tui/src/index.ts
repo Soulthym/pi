@@ -107,6 +107,7 @@ export {
 	type OverlayMargin,
 	type OverlayOptions,
 	type OverlayUnfocusOptions,
+	type ScreenMode,
 	type SizeValue,
 	TUI,
 } from "./tui.ts";
