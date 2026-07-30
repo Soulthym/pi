@@ -19,6 +19,10 @@ import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } fro
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
+const ENTER_FULLSCREEN = "\x1b[?1049h\x1b[?1000h\x1b[?1006h";
+const EXIT_FULLSCREEN = "\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
+
+export type ScreenMode = "inline" | "fullscreen";
 
 interface KittyImageHeader {
 	ids: number[];
@@ -314,7 +318,8 @@ export class TUI extends Container {
 	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
-	private stopped = false;
+	private stopped = true;
+	private screenMode: ScreenMode = "inline";
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
 	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
@@ -337,6 +342,21 @@ export class TUI extends Container {
 
 	get fullRedraws(): number {
 		return this.fullRedrawCount;
+	}
+
+	getScreenMode(): ScreenMode {
+		return this.screenMode;
+	}
+
+	/**
+	 * Select how the TUI owns the terminal. The low-level TUI remains inline by
+	 * default so existing embedders keep their current terminal behavior.
+	 */
+	setScreenMode(mode: ScreenMode): void {
+		if (!this.stopped) {
+			throw new Error("Cannot change TUI screen mode while it is running");
+		}
+		this.screenMode = mode;
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -635,17 +655,24 @@ export class TUI extends Container {
 	}
 
 	start(): void {
+		if (!this.stopped) return;
 		this.stopped = false;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (this.screenMode === "fullscreen") {
+			// Button/wheel tracking plus SGR coordinates works across common
+			// desktop terminals and Termux. Text selection keeps each terminal's
+			// standard mouse-reporting escape hatch (for example Shift-drag).
+			this.terminal.write(ENTER_FULLSCREEN);
+		}
 		this.terminal.hideCursor();
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031h");
 		}
 		this.queryCellSize();
-		this.requestRender();
+		this.requestRender(this.screenMode === "fullscreen");
 	}
 
 	addInputListener(listener: InputListener): () => void {
@@ -687,6 +714,7 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		if (this.stopped) return;
 		this.stopped = true;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
@@ -695,8 +723,9 @@ export class TUI extends Container {
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
-		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
+		// Inline mode leaves the cursor after its scrollback content. Fullscreen
+		// mode instead restores the saved primary screen without adding text.
+		if (this.screenMode === "inline" && this.previousLines.length > 0) {
 			// Overwrite the inverted cursor with a normal space to clear the artifact
 			this.terminal.write(" ");
 			const targetRow = this.previousLines.length; // Line after the last content
@@ -709,6 +738,9 @@ export class TUI extends Container {
 			this.terminal.write("\r\n");
 		}
 
+		if (this.screenMode === "fullscreen") {
+			this.terminal.write(EXIT_FULLSCREEN);
+		}
 		this.terminal.showCursor();
 		this.terminal.stop();
 	}
@@ -1256,6 +1288,144 @@ export class TUI extends Container {
 	}
 
 	private doRender(): void {
+		if (this.screenMode === "fullscreen") {
+			this.doFullscreenRender();
+			return;
+		}
+		this.doInlineRender();
+	}
+
+	private doFullscreenRender(): void {
+		if (this.stopped) return;
+		const width = Math.max(1, this.terminal.columns);
+		const height = Math.max(1, this.terminal.rows);
+		const dimensionsChanged =
+			(this.previousWidth !== 0 && this.previousWidth !== width) ||
+			(this.previousHeight !== 0 && this.previousHeight !== height);
+
+		// Keep component rendering unchanged for API compatibility. Transcript
+		// virtualization is layered on later; this renderer only constrains terminal
+		// output and retained frame state to the visible screen.
+		let newLines = this.render(width);
+		if (this.overlayStack.length > 0) {
+			newLines = this.compositeOverlays(newLines, width, height);
+		}
+		if (newLines.length > height) {
+			newLines = newLines.slice(-height);
+		}
+		while (newLines.length < height) {
+			newLines.push("");
+		}
+
+		const cursorPos = this.extractCursorPosition(newLines, height);
+		newLines = this.applyLineResets(newLines);
+		const newKittyImageIds = this.collectKittyImageIds(newLines);
+		const changedRows: number[] = [];
+		for (let row = 0; row < height; row++) {
+			if (this.previousLines[row] !== newLines[row]) {
+				changedRows.push(row);
+			}
+		}
+
+		let fullRender = this.previousLines.length !== height || dimensionsChanged;
+		if (changedRows.length > 0 && (this.previousKittyImageIds.size > 0 || newKittyImageIds.size > 0)) {
+			// Images reserve multiple terminal rows. Repainting the bounded frame is
+			// the simplest correct fallback when an image-bearing frame changes.
+			fullRender = true;
+		}
+		const rowsToRender = fullRender ? Array.from({ length: height }, (_, row) => row) : changedRows;
+
+		if (rowsToRender.length > 0) {
+			let buffer = "\x1b[?2026h";
+			if (fullRender) {
+				this.fullRedrawCount += 1;
+				buffer += this.deleteKittyImages(this.previousKittyImageIds);
+				buffer += "\x1b[2J";
+			}
+
+			for (let index = 0; index < rowsToRender.length; index++) {
+				const row = rowsToRender[index];
+				const line = newLines[row];
+				this.assertFullscreenLineFits(line, row, width, newLines);
+				buffer += `\x1b[${row + 1};1H\x1b[2K`;
+
+				if (isImageLine(line)) {
+					const reservedRows = this.getKittyImageReservedRows(newLines, row, height - 1);
+					for (let offset = 1; offset < reservedRows; offset++) {
+						buffer += `\x1b[${row + offset + 1};1H\x1b[2K`;
+					}
+					buffer += `\x1b[${row + 1};1H${line}`;
+					index += reservedRows - 1;
+					continue;
+				}
+				buffer += line;
+			}
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+		}
+
+		this.cursorRow = height - 1;
+		this.hardwareCursorRow = height - 1;
+		this.maxLinesRendered = height;
+		this.previousViewportTop = 0;
+		this.positionFullscreenHardwareCursor(cursorPos, height, width);
+		this.previousLines = newLines;
+		this.previousKittyImageIds = newKittyImageIds;
+		this.previousWidth = width;
+		this.previousHeight = height;
+	}
+
+	private assertFullscreenLineFits(line: string, row: number, width: number, lines: string[]): void {
+		if (isImageLine(line) || visibleWidth(line) <= width) return;
+
+		const crashLogPath = path.join(this.logDirectory, "pi-crash.log");
+		const crashData = [
+			`Crash at ${new Date().toISOString()}`,
+			`Terminal width: ${width}`,
+			`Line ${row} visible width: ${visibleWidth(line)}`,
+			"",
+			"=== Fullscreen frame lines ===",
+			...lines.map((renderedLine, index) => `[${index}] (w=${visibleWidth(renderedLine)}) ${renderedLine}`),
+			"",
+		].join("\n");
+		fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+		fs.writeFileSync(crashLogPath, crashData);
+		this.stop();
+
+		throw new Error(
+			[
+				`Rendered line ${row} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
+				"",
+				"This is likely caused by a custom TUI component not truncating its output.",
+				"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+				"",
+				`Debug log written to: ${crashLogPath}`,
+			].join("\n"),
+		);
+	}
+
+	private positionFullscreenHardwareCursor(
+		cursorPos: { row: number; col: number } | null,
+		height: number,
+		width: number,
+	): void {
+		if (!cursorPos) {
+			this.terminal.hideCursor();
+			return;
+		}
+
+		const targetRow = Math.max(0, Math.min(cursorPos.row, height - 1));
+		const targetCol = Math.max(0, Math.min(cursorPos.col, width - 1));
+		this.terminal.write(`\x1b[${targetRow + 1};${targetCol + 1}H`);
+		this.hardwareCursorRow = targetRow;
+		if (this.showHardwareCursor) {
+			this.terminal.showCursor();
+		} else {
+			this.terminal.hideCursor();
+		}
+	}
+
+	private doInlineRender(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
