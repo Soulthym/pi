@@ -122,6 +122,7 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		const header = { setExpanded: vi.fn() };
 		const loadedResourcesChild = { setExpanded: vi.fn() };
 		const chatChild = { setExpanded: vi.fn() };
+		const invalidateItem = vi.fn();
 		const fakeThis: any = {
 			toolOutputExpanded: false,
 			customHeader: undefined,
@@ -129,6 +130,7 @@ describe("InteractiveMode.setToolsExpanded", () => {
 			loadedResourcesContainer: { children: [loadedResourcesChild] },
 			chatContainer: {
 				children: [chatChild],
+				invalidateItem,
 				withPreservedPendingOutput: vi.fn((update: () => void) => update()),
 			},
 			ui: { requestRender: vi.fn() },
@@ -141,6 +143,8 @@ describe("InteractiveMode.setToolsExpanded", () => {
 		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.chatContainer.withPreservedPendingOutput).toHaveBeenCalledTimes(1);
+		expect(invalidateItem).toHaveBeenCalledOnce();
+		expect(invalidateItem).toHaveBeenCalledWith(chatChild);
 		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
 	});
 });
