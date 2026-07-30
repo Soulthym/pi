@@ -178,6 +178,59 @@ describe("InteractiveMode.setupTranscriptInput", () => {
 	});
 });
 
+describe("InteractiveMode.addExtensionTerminalInputListener", () => {
+	test("keeps all extension handlers ahead of the transcript fallback", () => {
+		type InputResult = { consume?: boolean; data?: string } | undefined;
+		type InputListener = (data: string) => InputResult;
+		const listeners: InputListener[] = [];
+		const addInputListener = vi.fn((listener: InputListener) => {
+			listeners.push(listener);
+			return () => {
+				const index = listeners.indexOf(listener);
+				if (index !== -1) listeners.splice(index, 1);
+			};
+		});
+		const editor = {};
+		const calls: string[] = [];
+		const fakeThis: any = {
+			transcriptInputUnsubscribe: undefined,
+			extensionTerminalInputUnsubscribers: new Set(),
+			setupTranscriptInput: (InteractiveMode as any).prototype.setupTranscriptInput,
+			ui: {
+				addInputListener,
+				getScreenMode: vi.fn(() => "fullscreen"),
+				hasOverlay: vi.fn(() => false),
+				requestRender: vi.fn(),
+			},
+			editor,
+			editorContainer: { children: [editor] },
+			chatContainer: {
+				handleMouseInput: vi.fn(() => false),
+				scrollByLines: vi.fn(),
+			},
+			keybindings: { matches: vi.fn(() => true) },
+		};
+
+		(InteractiveMode as any).prototype.setupTranscriptInput.call(fakeThis);
+		(InteractiveMode as any).prototype.addExtensionTerminalInputListener.call(fakeThis, () => {
+			calls.push("first");
+		});
+		(InteractiveMode as any).prototype.addExtensionTerminalInputListener.call(fakeThis, () => {
+			calls.push("second");
+			return { consume: true };
+		});
+
+		for (const listener of [...listeners]) {
+			if (listener("x")?.consume) break;
+		}
+
+		expect(calls).toEqual(["first", "second"]);
+		expect(listeners).toHaveLength(3);
+		expect(fakeThis.keybindings.matches).not.toHaveBeenCalled();
+		expect(fakeThis.chatContainer.scrollByLines).not.toHaveBeenCalled();
+	});
+});
+
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
 		initTheme("dark");

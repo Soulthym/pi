@@ -7,6 +7,10 @@ export interface TranscriptItemInvalidationSource {
 	setTranscriptInvalidationHandler(handler: TranscriptItemInvalidationHandler): void;
 }
 
+export interface TranscriptItemCachePolicySource {
+	readonly transcriptItemCachePolicy: "versioned" | "uncached";
+}
+
 export type TranscriptViewportOptions = {
 	height?: number;
 	overscanRows?: number;
@@ -317,6 +321,10 @@ export class TranscriptViewport extends Container {
 		// Leading containers can change internally without an item-level version.
 		// Render them directly while visible; offscreen virtualization still skips them.
 		if (this.leadingComponents.includes(component)) {
+			return component.render(width);
+		}
+		const cachePolicySource = component as Component & Partial<TranscriptItemCachePolicySource>;
+		if (cachePolicySource.transcriptItemCachePolicy === "uncached") {
 			return component.render(width);
 		}
 		const state = this.ensureItemState(component);

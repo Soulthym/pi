@@ -2135,6 +2135,9 @@ export class InteractiveMode {
 	): () => void {
 		const unsubscribe = this.ui.addInputListener(handler);
 		this.extensionTerminalInputUnsubscribers.add(unsubscribe);
+		// Extension raw-input handlers keep first refusal; transcript scrolling is
+		// the fullscreen fallback for input that extensions do not consume.
+		this.setupTranscriptInput();
 		return () => {
 			unsubscribe();
 			this.extensionTerminalInputUnsubscribers.delete(unsubscribe);

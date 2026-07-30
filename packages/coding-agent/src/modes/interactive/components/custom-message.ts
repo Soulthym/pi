@@ -4,12 +4,14 @@ import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@ear
 import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import type { TranscriptItemCachePolicySource } from "./transcript-viewport.ts";
 
 /**
  * Component that renders a custom message entry from extensions.
  * Uses distinct styling to differentiate from user messages.
  */
-export class CustomMessageComponent extends Container {
+export class CustomMessageComponent extends Container implements TranscriptItemCachePolicySource {
+	readonly transcriptItemCachePolicy = "uncached" as const;
 	private message: CustomMessage<unknown>;
 	private customRenderer?: MessageRenderer;
 	private box: Box;
