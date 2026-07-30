@@ -140,7 +140,7 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
-import { editInExternalEditor } from "./external-editor.ts";
+import { editInExternalEditor, flushTerminalOutput } from "./external-editor.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { resolveInteractiveScreenMode } from "./screen-mode.ts";
 import {
@@ -214,37 +214,12 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
-const TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS = 1000;
-
 function isDeadTerminalError(error: unknown): boolean {
 	if (!error || typeof error !== "object" || !("code" in error)) {
 		return false;
 	}
 	const code = (error as NodeJS.ErrnoException).code;
 	return code !== undefined && DEAD_TERMINAL_ERROR_CODES.has(code);
-}
-
-async function flushTerminalOutput(): Promise<void> {
-	if (!process.stdout.isTTY) return;
-
-	await new Promise<void>((resolve) => {
-		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
-			resolve();
-		};
-		const timeout = setTimeout(finish, TERMINAL_OUTPUT_FLUSH_TIMEOUT_MS);
-
-		try {
-			// A non-empty final write is a stream-ordering barrier; process.exit()
-			// may otherwise truncate terminal restoration sequences on slow ttys.
-			process.stdout.write("\x1b[0m", finish);
-		} catch {
-			finish();
-		}
-	});
 }
 
 const ANTHROPIC_SUBSCRIPTION_AUTH_WARNING =
@@ -1814,6 +1789,7 @@ export class InteractiveMode {
 		this.showError(`${prefix}: ${message}`);
 		stopThemeWatcher();
 		this.stop();
+		await flushTerminalOutput();
 		process.exit(1);
 	}
 
@@ -2638,7 +2614,7 @@ export class InteractiveMode {
 		// Register app action handlers
 		this.defaultEditor.onAction("app.clear", () => this.handleCtrlC());
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
-		this.defaultEditor.onAction("app.suspend", () => this.handleCtrlZ());
+		this.defaultEditor.onAction("app.suspend", () => void this.handleCtrlZ());
 		this.defaultEditor.onAction("app.thinking.cycle", () => this.cycleThinkingLevel());
 		this.defaultEditor.onAction("app.model.cycleForward", () => this.cycleModel("forward"));
 		this.defaultEditor.onAction("app.model.cycleBackward", () => this.cycleModel("backward"));
@@ -3699,8 +3675,9 @@ export class InteractiveMode {
 	 * call ui.stop() to restore cooked mode, the cursor, and disable bracketed
 	 * paste / Kitty / modifyOtherKeys sequences.
 	 */
-	private uncaughtCrash(error: Error): never {
+	private async uncaughtCrash(error: Error): Promise<never> {
 		if (this.isShuttingDown) {
+			await flushTerminalOutput();
 			process.exit(1);
 		}
 		this.isShuttingDown = true;
@@ -3715,6 +3692,7 @@ export class InteractiveMode {
 		} catch {}
 		console.error("pi exiting due to uncaughtException:");
 		console.error(error);
+		await flushTerminalOutput();
 		process.exit(1);
 	}
 
@@ -3761,7 +3739,7 @@ export class InteractiveMode {
 		// Restore the terminal before the process dies on any uncaught throw.
 		// Without this, an unhandled exception from extension code (or anywhere
 		// in pi) leaves the terminal in raw mode with no cursor.
-		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
+		const uncaughtExceptionHandler = (error: Error) => void this.uncaughtCrash(error);
 		process.prependListener("uncaughtException", uncaughtExceptionHandler);
 		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
 	}
@@ -3773,7 +3751,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers = [];
 	}
 
-	private handleCtrlZ(): void {
+	private async handleCtrlZ(): Promise<void> {
 		if (process.platform === "win32") {
 			this.showStatus("Suspend to background is not supported on Windows");
 			return;
@@ -3800,6 +3778,7 @@ export class InteractiveMode {
 		try {
 			// Stop the TUI (restore terminal to normal mode)
 			this.ui.stop();
+			await flushTerminalOutput();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
 			process.kill(0, "SIGTSTP");
@@ -3937,9 +3916,11 @@ export class InteractiveMode {
 		const content = this.editor.getExpandedText?.() ?? this.editor.getText();
 		this.ui.stop();
 		try {
+			await flushTerminalOutput();
 			const result = await editInExternalEditor({
 				command: editorCmd,
 				content,
+				announce: this.ui.getScreenMode() !== "fullscreen",
 			});
 			if (result.status === "complete") {
 				this.editor.setText(result.content);
