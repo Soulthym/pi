@@ -1,4 +1,4 @@
-import type { Component } from "./tui.ts";
+import type { Component } from "@earendil-works/pi-tui";
 
 type RenderCacheEntry = {
 	epoch: number;

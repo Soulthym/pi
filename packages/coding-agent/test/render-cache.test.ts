@@ -1,7 +1,7 @@
 import assert from "node:assert";
-import { describe, it } from "node:test";
-import { ComponentRenderCache } from "../src/render-cache.ts";
-import type { Component } from "../src/tui.ts";
+import type { Component } from "@earendil-works/pi-tui";
+import { describe, it } from "vitest";
+import { ComponentRenderCache } from "../src/modes/interactive/components/render-cache.ts";
 
 class CountingComponent implements Component {
 	lines: string[];
