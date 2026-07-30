@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { Container, Spacer, Text } from "../../../../tui/src/index.ts";
+import { Text } from "../../../../tui/src/index.ts";
 import { CustomEditor, type ExtensionAPI } from "../../../src/index.ts";
 
 class CompatibilityEditor extends CustomEditor {}
@@ -61,17 +61,13 @@ export default function fullscreenUiCompatibilityExtension(pi: ExtensionAPI): vo
 		description: "Exercise custom overlay rendering.",
 		async handler(_args, context) {
 			await context.ui.custom<void>(
-				(_tui, theme, _keybindings, done) => {
-					const component = new Container();
-					component.addChild(new Text(theme.fg("accent", "compat overlay"), 1, 0));
-					component.addChild(new Spacer(1));
-					component.addChild({
-						render: () => ["press any key"],
-						handleInput: () => done(),
-						invalidate() {},
-					});
-					return component;
-				},
+				// ctx.ui.custom() focuses the returned root, so input handling must
+				// live here rather than on a child of non-forwarding Container.
+				(_tui, theme, _keybindings, done) => ({
+					render: () => [theme.fg("accent", "compat overlay"), "", "press any key"],
+					handleInput: () => done(),
+					invalidate() {},
+				}),
 				{ overlay: true, overlayOptions: { width: "50%", maxHeight: "50%" } },
 			);
 		},
