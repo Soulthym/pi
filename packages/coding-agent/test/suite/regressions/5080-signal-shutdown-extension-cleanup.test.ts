@@ -204,6 +204,33 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 		expect(exit).toHaveBeenCalledWith(0);
 	});
 
+	test("interactive shutdown flushes terminal restoration before exiting", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new ProcessExitError();
+		}) as typeof process.exit);
+		setStdoutIsTTY(true);
+		let completeFlush: (() => void) | undefined;
+		vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array, callback?: () => void) => {
+			if (String(chunk) === "\x1b[0m") {
+				completeFlush = callback;
+			}
+			return true;
+		}) as typeof process.stdout.write);
+		const order: string[] = [];
+		const context = createContext(order);
+
+		const shutdownPromise = callShutdown(context);
+		await vi.waitFor(() => expect(completeFlush).toBeTypeOf("function"));
+
+		expect(order).toEqual(["drainInput", "stop", "dispose"]);
+		expect(exit).not.toHaveBeenCalled();
+
+		completeFlush?.();
+		await shutdownPromise;
+
+		expect(exit).toHaveBeenCalledWith(0);
+	});
+
 	test("re-entrant shutdown is a no-op", async () => {
 		vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new ProcessExitError();
