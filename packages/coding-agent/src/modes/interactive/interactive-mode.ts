@@ -28,6 +28,7 @@ import {
 	fuzzyFilter,
 	getCapabilities,
 	hyperlink,
+	isKeyRelease,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -2650,6 +2651,8 @@ export class InteractiveMode {
 		if (this.ui.getScreenMode() !== "fullscreen") return;
 
 		this.transcriptInputUnsubscribe = this.ui.addInputListener((data) => {
+			// Raw listeners see Kitty releases before the focused-input release filter.
+			if (isKeyRelease(data)) return;
 			if (this.ui.hasOverlay() || !this.editorContainer.children.includes(this.editor as Component)) {
 				return;
 			}
@@ -3865,18 +3868,20 @@ export class InteractiveMode {
 
 	private setToolsExpanded(expanded: boolean): void {
 		this.toolOutputExpanded = expanded;
-		const activeHeader = this.customHeader ?? this.builtInHeader;
-		if (isExpandable(activeHeader)) {
-			activeHeader.setExpanded(expanded);
-		}
-		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
-			for (const child of container.children) {
-				if (isExpandable(child)) {
-					child.setExpanded(expanded);
-					if (container === this.chatContainer) this.chatContainer.invalidateItem?.(child);
+		this.chatContainer.withPreservedPendingOutput(() => {
+			const activeHeader = this.customHeader ?? this.builtInHeader;
+			if (isExpandable(activeHeader)) {
+				activeHeader.setExpanded(expanded);
+			}
+			for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
+				for (const child of container.children) {
+					if (isExpandable(child)) {
+						child.setExpanded(expanded);
+						if (container === this.chatContainer) this.chatContainer.invalidateItem?.(child);
+					}
 				}
 			}
-		}
+		});
 		this.ui.requestRender();
 	}
 
