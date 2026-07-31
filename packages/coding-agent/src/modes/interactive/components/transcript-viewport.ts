@@ -120,6 +120,7 @@ export class TranscriptViewport extends Container {
 		this.itemStates.clear();
 		this.itemIndices.clear();
 		this.totalCachedLines = 0;
+		// A conversation rebuild starts at the live edge before replacement items render.
 		this.anchor = undefined;
 		this.lastFrameTop = undefined;
 		this.pendingOutput = false;
